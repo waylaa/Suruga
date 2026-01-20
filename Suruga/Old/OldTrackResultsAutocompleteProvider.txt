@@ -1,0 +1,22 @@
+    string IAutocompleteProvider.Identity => "autocomplete::queried-tracks-provider";
+
+    public async ValueTask<IReadOnlyList<IApplicationCommandOptionChoice>> GetSuggestionsAsync
+    (
+        IReadOnlyList<IApplicationCommandInteractionDataOption> options,
+        string userInput,
+        CancellationToken ct = default
+    )
+    {
+        TrackLoadResult tracks = await audio.Tracks.LoadTracksAsync(userInput, TrackSearchMode.YouTube, cancellationToken: ct);
+
+        if (tracks.Count == 0)
+        {
+            return [];
+        }
+
+        return tracks.Tracks
+            .Take(25) // Autocompletion limit.
+            .Select(track => new ApplicationCommandOptionChoice(track.Title, track.Uri!.AbsoluteUri))
+            .ToList()
+            .AsReadOnly();
+    }

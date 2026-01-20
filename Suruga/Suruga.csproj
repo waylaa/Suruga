@@ -1,0 +1,33 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+	<PublishAot>false</PublishAot>
+	<AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="FFmpeg.AutoGen" Version="8.0.0" />
+    <PackageReference Include="FFmpeg.LGPL" Version="20260102.1.0" />
+    <PackageReference Include="Jint" Version="4.4.2" />
+    <PackageReference Include="Microsoft.ClearScript.Complete" Version="7.5.0" />
+    <PackageReference Include="Microsoft.Extensions.Caching.Memory" Version="10.0.1" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.1" />
+    <PackageReference Include="Microsoft.Extensions.Http.Resilience" Version="10.1.0" />
+    <PackageReference Include="NetCord" Version="1.0.0-alpha.452" />
+    <PackageReference Include="NetCord.Hosting" Version="1.0.0-alpha.452" />
+    <PackageReference Include="NetCord.Hosting.Services" Version="1.0.0-alpha.452" />
+    <PackageReference Include="NetCord.Services" Version="1.0.0-alpha.452" />
+    <PackageReference Include="OpusSharp.Natives" Version="1.6.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="settings.json">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+</Project>
