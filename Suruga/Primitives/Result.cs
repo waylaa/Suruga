@@ -2,7 +2,7 @@
 
 namespace Suruga.Primitives;
 
-public readonly record struct Result<T>
+public readonly struct Result<T>
 {
     [MemberNotNullWhen(true, nameof(Value))]
     [MemberNotNullWhen(false, nameof(Error))]
@@ -48,7 +48,7 @@ public readonly record struct Result<T>
     }
 }
 
-internal readonly record struct Result
+internal readonly struct Result
 {
     internal static Result Success => new(true, null);
     
