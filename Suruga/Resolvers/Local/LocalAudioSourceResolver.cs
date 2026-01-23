@@ -3,7 +3,6 @@ using Suruga.IPC;
 using Suruga.Primitives;
 using Suruga.Resolvers.Abstractions;
 using Suruga.Resolvers.Inputs;
-using Suruga.Transport.Primitives;
 
 namespace Suruga.Resolvers.Local;
 
@@ -46,9 +45,10 @@ internal sealed class LocalAudioSourceResolver : IAudioSourceResolver
 
             AudioSource source = AudioSource.FromSingle(AudioPlatform.Local, new AudioTrack
             {
-                Stream = new LocalAudioStreamDescriptor(input),
                 Platform = AudioPlatform.Local,
                 Title = title,
+                Url = input,
+                StreamUrl = input,
                 Author = author,
                 Duration = TimeSpan.TryParse(duration, out TimeSpan trackDuration) ? trackDuration : null
             });

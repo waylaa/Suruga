@@ -1,6 +1,5 @@
 ﻿using Suruga.Primitives;
 using Suruga.Transport.Abstractions;
-using Suruga.Transport.Primitives;
 
 namespace Suruga.Transport.Factories;
 
@@ -10,5 +9,5 @@ internal sealed class LocalAudioByteStreamFactory : IAudioByteStreamFactory
         => platform is AudioPlatform.Local;
 
     public IAudioByteStream Create(AudioTrack track)
-        => new LocalAudioByteStream((LocalAudioStreamDescriptor)track.Stream);
+        => new LocalAudioByteStream(track);
 }

@@ -140,5 +140,5 @@ internal sealed class AudioCommands(AudioSessionManager sessionManager) : Applic
     }
 
     private static string FormatTrackMessage(AudioTrack track)
-        => $"[{track.Title}]({track.Stream.Url}).";
+        => $"[{track.Title}]({track.Url}).";
 }

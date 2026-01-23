@@ -9,7 +9,6 @@ using Suruga.Resolvers.Abstractions;
 using Suruga.Resolvers.Inputs;
 using Suruga.Resolvers.Youtube.Clients;
 using Suruga.Resolvers.Youtube.Clients.Abstractions;
-using Suruga.Transport.Primitives;
 
 namespace Suruga.Resolvers.Youtube;
 
@@ -55,6 +54,7 @@ internal sealed class YoutubeAudioSourceResolver(CompositeYoutubeClient youtube,
             return Result<AudioSource>.Failure(playerResult.Error);
         }
 
+        YoutubeClientBase client = tuple.Client;
         JsonNode player = tuple.Response;
         
         Result playabilityResult = ValidatePlayability(player);
@@ -117,11 +117,18 @@ internal sealed class YoutubeAudioSourceResolver(CompositeYoutubeClient youtube,
         source = AudioSource.FromSingle(AudioPlatform.Youtube, new AudioTrack
         {
             Platform = AudioPlatform.Youtube,
-            Stream = new YoutubeAudioStreamDescriptor(streamUrl, streamUrlExpiry, () => DeserializeSingleTrackAsync(input, type, token), tuple.Client),
             Title = title,
+            Url = videoUrl,
+            StreamUrl = streamUrl,
             Author = author,
             ThumbnailUrl = thumbnailUrl,
-            Duration = TimeSpan.TryParse(duration, out TimeSpan trackDuration) ? trackDuration : null
+            Duration = TimeSpan.TryParse(duration, out TimeSpan trackDuration) ? trackDuration : null,
+            Callback = () => DeserializeSingleTrackAsync(input, type, token),
+            CallbackInfo = new Dictionary<string, object>
+            {
+                ["Client"] = client,
+                ["Expiry"] = streamUrlExpiry
+            }
         });
 
         _sourceCache.Set(cacheKey, source, streamUrlExpiry);

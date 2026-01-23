@@ -4,7 +4,6 @@ using System.Net.Http.Headers;
 using Suruga.Primitives;
 using Suruga.Resolvers.Youtube.Clients.Abstractions;
 using Suruga.Transport.Abstractions;
-using Suruga.Transport.Primitives;
 
 namespace Suruga.Transport;
 
@@ -27,12 +26,17 @@ internal sealed class YoutubeAudioByteStream : IAudioByteStream
     private string _currentUrl;
     private long _position;
 
-    public YoutubeAudioByteStream(YoutubeAudioStreamDescriptor descriptor, int readBufferSize = 64 * 1024, int maxPipeBufferSize = 512 * 1024)
+    public YoutubeAudioByteStream(AudioTrack track, int readBufferSize = 64 * 1024, int maxPipeBufferSize = 512 * 1024)
     {
-        _resolveDelegate = descriptor.ResolveDelegate;
-        _boundClient = descriptor.BoundClient;
-        _currentUrl = descriptor.Url;
-        _absoluteExpiry = DateTimeOffset.UtcNow + descriptor.Expiration;
+        if (track.Callback is null || track.Callback is not Func<Task<Result<AudioSource>>> resolveCallback || track.CallbackInfo is null)
+        {
+            throw new ArgumentException("Track must have a valid resolve callback and callback info.", nameof(track));
+        }
+
+        _resolveDelegate = resolveCallback;
+        _boundClient = (YoutubeClientBase)track.CallbackInfo["Client"];
+        _currentUrl = track.StreamUrl;
+        _absoluteExpiry = DateTimeOffset.UtcNow + (TimeSpan)track.CallbackInfo["Expiry"];
         _readBufferSize = readBufferSize;
 
         _pipe = new Pipe(new PipeOptions
@@ -199,10 +203,14 @@ internal sealed class YoutubeAudioByteStream : IAudioByteStream
         }
 
         AudioTrack track = source.Tracks[0];
-        YoutubeAudioStreamDescriptor descriptor = (YoutubeAudioStreamDescriptor)track.Stream;
 
-        _currentUrl = descriptor.Url;
-        _absoluteExpiry = DateTimeOffset.UtcNow + descriptor.Expiration;
+        if (track.CallbackInfo is null)
+        {
+            throw new InvalidOperationException("Resolved track must have callback info.");
+        }
+
+        _currentUrl = track.StreamUrl;
+        _absoluteExpiry = DateTimeOffset.UtcNow + (TimeSpan)track.CallbackInfo["Expiry"];
 
         // Close existing stream to force reconnect with new URL
         if (_httpStream is not null)
