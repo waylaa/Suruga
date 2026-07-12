@@ -49,4 +49,10 @@
 			<Link>.gitignore</Link>
 		</Content>
 	</ItemGroup>
+
+	<ItemGroup>
+	  <Folder Include="runtimes\linux-arm64\native\" />
+	  <Folder Include="runtimes\linux-x64\native\" />
+	  <Folder Include="runtimes\win-x64\native\" />
+	</ItemGroup>
 </Project>
