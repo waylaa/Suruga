@@ -1,0 +1,41 @@
+services:
+  suruga:
+    build: .
+    container_name: suruga-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_CONNECTIONSTRING: mongodb://mongodb:27017
+      INVIDIOUSCOMPANION_HOST: invidious-companion
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      invidious-companion:
+        condition: service_started
+
+  mongodb:
+    image: mongo:latest
+    container_name: suruga-mongodb
+    restart: unless-stopped
+    volumes:
+      - mongodb-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  invidious-companion:
+    image: quay.io/invidious/invidious-companion:latest
+    container_name: suruga-invidious-companion
+    restart: unless-stopped
+    environment:
+      SERVER_SECRET_KEY: ${INVIDIOUSCOMPANION_SECRETKEY}
+    volumes:
+      - invidious_companion-cache:/var/tmp/youtubei.js
+
+volumes:
+  mongodb-data:
+  invidious_companion-cache:
