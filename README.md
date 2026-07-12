@@ -1,73 +1,84 @@
 # Suruga
-A multi-functional Discord bot containg moderation, music and large language model related commands.
-
-## Overview
-- Moderation features (kick/ban/prune)
-- Server features (channel create, channel delete)
-- Music features (Youtube Music, Local files, Playlists & Queues)
-- LLM features (Chat with a large language model of your liking)
+A Lavalink-less Discord music bot written in C#.
 
 ## Usage
-1. Get the latest build from the [Releases](https://github.com/waylaa/Suruga/releases) page.
-2. Open your preferred terminal and run whichever command you want below.
-   
-### Windows
 
-#### Include Moderation and Server Commands
-```
-.\Suruga.exe --token="..."
-```
+### Local Setup
 
-#### Include Music Commands
-```
-.\Suruga.exe --token="..." --enable-music-commands
-```
+#### Requirements
 
-⚠️ Before running the bot with music commands enabled, make sure to open [Lavalink](https://github.com/lavalink-devs/Lavalink) in your terminal first!
+Before running Suruga locally, make sure the following services are installed and running:
 
-##### Optional Lavalink Commands
-```
---lavalink-rest-hostname (Default: http://localhost:2333)
---lavalink-websocket-hostname (Default: ws://localhost:2333/v4/websocket)
---lavalink-password (Default: youshallnotpass)
-```
+* [MongoDB](https://www.mongodb.com/)
+* [Invidious Companion](https://github.com/iv-org/invidious-companion)
 
-⚠️ Make sure to transfer the new rest/websocket hostname or password to the appropriate arguments above if you changed them in Lavalink's application.yml file.
+1. Start your MongoDB instance.
+2. Start Invidious Companion.
+3. Download the latest release from the [Releases](https://github.com/waylaa/Suruga/releases) page.
+4. Rename `.env.example` to `.env`.
+5. Open `.env` and adjust any settings to suit your environment, most importantly `BOT_TOKEN`.
+6. Run the executable.
 
-#### Include LLM Commands
-```
-.\Suruga.exe --token="..." --llm-model="path/to/gguf/model"
-```
+### Docker Setup
 
-##### Optional LLM Commands
-```
---llm-instructions="..."
+#### Requirements
+
+* Docker with Docker Compose
+
+1. Clone the repository:
+
+```bash
+git clone https://github.com/waylaa/Suruga
+cd Suruga
 ```
 
-### MacOS/Linux
-Same command usage as above without the .exe extension.
+2. Copy/Rename `.env.example` to `.env` and configure `BOT_TOKEN`.
 
-## Building/Contributing
-### 1. Prerequisites (Visual Studio Installer)
-  - .NET desktop development
-    
-### 2. Install .NET 8
-- Make sure you have .NET 8 installed on your machine.
-- If not installed, download and install it from [here](https://dotnet.microsoft.com/en-us/download/dotnet/8.0).
+3. Start the container:
 
-### 3. Clone
-- Open your terminal or command prompt.
-- Navigate to the directory where you want to clone the repository:
-```
-cd <dir>
+```bash
+docker compose up -d
 ```
 
-- Clone the repository
-```
-git clone https://github.com/waylaa/OsuCollectionDownloader.git
+You should see the `suruga-bot` container running.
+
+To shutdown the container, run:
+```bash
+docker compose down
 ```
 
-- Open the .sln file, restore the nuget packages and you're done.
+## Building / Contributing
+
+### Prerequisites
+
+* .NET 10 SDK
+
+1. Install the .NET 10 SDK from https://dotnet.microsoft.com/download/dotnet/10.0
+2. Clone the repository:
+
+```bash
+git clone https://github.com/waylaa/Suruga
+cd Suruga
+```
+
+3. Restore dependencies and build:
+
+```bash
+dotnet restore
+dotnet build
+```
+
+Alternatively, open `Suruga.slnx` in Visual Studio/Rider and build the solution.
 
 ## License
-[MIT](https://choosealicense.com/licenses/mit/)
+This project is licensed under the [MIT](https://choosealicense.com/licenses/mit/) License.
+
+### Third-Party Components
+
+This repository redistributes prebuilt FFmpeg binaries for audio decoding under the GNU Lesser General Public License v2.1 (LGPL-2.1).
+
+* FFmpeg Copyright © the FFmpeg developers
+* FFmpeg website: https://ffmpeg.org/
+* FFmpeg source code: https://git.ffmpeg.org/ffmpeg.git
+
+A copy of the LGPL v2.1 license is included at `runtimes/licenses/ffmpeg/COPYING.LGPLv2.1`
