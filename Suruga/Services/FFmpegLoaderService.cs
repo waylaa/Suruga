@@ -54,7 +54,7 @@ internal sealed partial class FFmpegLoaderService
 
     private bool TryGetLocation(out string path)
     {
-        // 1. Check for BotOptions.FFmpegPath from appsettings.json
+        // Check for BotOptions.FFmpegPath from .env
         if (!string.IsNullOrWhiteSpace(_botOptions.FFmpegPath))
         {
             path = _botOptions.FFmpegPath;
@@ -63,7 +63,7 @@ internal sealed partial class FFmpegLoaderService
         
         Dictionary<string, string[]> map = FunctionResolverBase.LibraryDependenciesMap;
 
-        // 2. Check for ffmpeg runtimes alongside this executable.
+        // Check for ffmpeg runtimes alongside this executable.
         string extension = OperatingSystem.IsWindows() ? "dll" : "so";
         string bundledDirectoryPath = Path.Combine(AppContext.BaseDirectory, "runtimes", RuntimeInformation.RuntimeIdentifier, "native");
         
@@ -77,7 +77,7 @@ internal sealed partial class FFmpegLoaderService
             return true;
         }
 
-        // 3. Check for windows or linux system-wide installations.
+        // Check for windows or linux system-wide installations.
         if (OperatingSystem.IsWindows())
         {
             string? globalPath = Environment.GetEnvironmentVariable("Path")
