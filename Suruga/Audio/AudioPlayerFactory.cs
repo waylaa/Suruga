@@ -1,8 +1,6 @@
 ﻿using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 using NetCord.Gateway;
 using NetCord.Logging;
-using Suruga.Options;
 using Suruga.Persistence;
 using Suruga.Resolvers;
 using Suruga.Transport;
@@ -15,7 +13,6 @@ internal sealed class AudioPlayerFactory
 	TrackStreamResolverRouter streamResolverRouter,
 	ReadOnlyAudioByteStreamFactory byteStreamFactory,
 	TrackQueueStateRepository repository,
-	IOptions<InvidiousCompanionOptions> invidiousCompanionOptions,
 	ILoggerFactory loggerFactory,
 	IVoiceLogger voiceLogger
 )
@@ -33,8 +30,7 @@ internal sealed class AudioPlayerFactory
 				byteStreamFactory,
 				loggerFactory
 			),
-			repository,
-			invidiousCompanionOptions
+			repository
 		);
 	}
 }

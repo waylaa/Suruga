@@ -1,6 +1,7 @@
 ﻿using Microsoft.Extensions.Logging;
 using Suruga.Audio.Decode;
 using Suruga.Audio.Decode.Primitives;
+using Suruga.Audio.Primitives;
 using Suruga.Primitives;
 using Suruga.Resolvers;
 using Suruga.Transport;
@@ -11,7 +12,7 @@ namespace Suruga.Audio;
 /// An audio playback engine that decodes, processes, and streams audio tracks
 /// to a Discord voice connection.
 /// </summary>
-internal sealed partial class AudioPlaybackEngine : IAsyncDisposable
+internal sealed partial class AudioPlaybackEngine : VolatileAsyncDisposable
 {
 	/// <summary>
 	/// Fires when a track finishes playback successfully or after an error.
@@ -37,13 +38,11 @@ internal sealed partial class AudioPlaybackEngine : IAsyncDisposable
 	private readonly ReadOnlyAudioByteStreamFactory _byteStreamFactory;
 	private readonly ILoggerFactory _loggerFactory;
 	private readonly ILogger<AudioPlaybackEngine> _logger;
-	private readonly VolatileReference<AudioDecoder> _decoderRef = new();
-	private readonly Signal _pauseSignal = new();
-	private readonly AsyncLock _playbackLock = new();
-
-	private Task? _playbackTask;
-	private CancellationTokenSource? _playbackCts;
-	private bool _isDisposed;
+	
+	private readonly VolatileDisposableResource<AudioDecoder> _decoderResource = new();
+	private readonly AsyncManualResetEvent _pauseSignal = new();
+	private readonly AsyncMutex _playbackMutex = new();
+	private readonly CancellableAsyncWork _playback = new();
 
 	/// <summary>
 	/// Initializes a new playback engine instance.
@@ -65,6 +64,8 @@ internal sealed partial class AudioPlaybackEngine : IAsyncDisposable
 		_byteStreamFactory = byteStreamFactory;
 		_loggerFactory = loggerFactory;
 		_logger = _loggerFactory.CreateLogger<AudioPlaybackEngine>();
+		
+		_pauseSignal.Set(); // Playback starts unpaused.
 	}
 
 	/// <summary>
@@ -74,13 +75,12 @@ internal sealed partial class AudioPlaybackEngine : IAsyncDisposable
 	/// <param name="token">A cancellation token.</param>
 	internal async Task PlayAsync(Track track, CancellationToken token = default)
 	{
-		using (await _playbackLock.EnterScopeAsync(token))
+		using (await _playbackMutex.EnterScopeAsync(token))
 		{
-			ObjectDisposedException.ThrowIf(_isDisposed, this);
+			ThrowIfDisposed();
 			await StopCoreAsync();
-
-			_playbackCts = CancellationTokenSource.CreateLinkedTokenSource(token);
-			_playbackTask = RunPlaybackAsync(track, _playbackCts.Token);
+			
+			await _playback.StartAsync(ct => RunPlaybackAsync(track, ct), token);
 		}
 	}
 
@@ -90,20 +90,18 @@ internal sealed partial class AudioPlaybackEngine : IAsyncDisposable
 	/// <param name="token">A cancellation token.</param>
 	internal async Task StopAsync(CancellationToken token = default)
 	{
-		using (await _playbackLock.EnterScopeAsync(token))
+		using (await _playbackMutex.EnterScopeAsync(token))
 		{
-			ObjectDisposedException.ThrowIf(_isDisposed, this);
-
-			// Wait for playback to finish stopping.
+			ThrowIfDisposed();
 			await StopCoreAsync();
 			
-			if (_decoderRef.TryCapture(out AudioDecoder? decoder))
+			if (_decoderResource.Current is AudioDecoder decoder)
 			{
 				decoder.Flush();
 				decoder.Dispose();
 			}
 
-			_decoderRef.Replace(null);
+			_decoderResource.Clear();
 			PostProcessor.Reset();
 			
 			await Connection.Sink.FlushAsync(token);
@@ -115,7 +113,7 @@ internal sealed partial class AudioPlaybackEngine : IAsyncDisposable
 	/// </summary>
 	internal void Pause()
 	{
-		ObjectDisposedException.ThrowIf(_isDisposed, this);
+		ThrowIfDisposed();
 		_pauseSignal.Reset();
 	}
 
@@ -124,7 +122,7 @@ internal sealed partial class AudioPlaybackEngine : IAsyncDisposable
 	/// </summary>
 	internal void Resume()
 	{
-		ObjectDisposedException.ThrowIf(_isDisposed, this);
+		ThrowIfDisposed();
 		_pauseSignal.Set();
 	}
 
@@ -134,9 +132,9 @@ internal sealed partial class AudioPlaybackEngine : IAsyncDisposable
 	/// <param name="position">The target playback position.</param>
 	internal void Seek(TimeSpan position)
 	{
-		ObjectDisposedException.ThrowIf(_isDisposed, this);
+		ThrowIfDisposed();
 
-		if (!_decoderRef.TryCapture(out AudioDecoder? decoder))
+		if (_decoderResource.Current is not AudioDecoder decoder)
 		{
 			return;
 		}
@@ -151,29 +149,22 @@ internal sealed partial class AudioPlaybackEngine : IAsyncDisposable
             // Ignore. 
         }
     }
-	
-	public async ValueTask DisposeAsync()
-	{
-		if (_isDisposed)
-		{
-			return;
-		}
-		
-		_isDisposed = true;
 
+	protected override async ValueTask DisposeCoreAsync()
+	{
 		try
 		{
-			await StopAsync();
+			await StopCoreAsync();
 		}
 		catch
 		{
 			// Ignore exceptions during disposal.
 		}
-
-		await Connection.DisposeAsync();
 		
+		_decoderResource.Clear();
+		await Connection.DisposeAsync();
 		PostProcessor.Reset();
-		_playbackLock.Dispose();
+		_playbackMutex.Dispose();
 	}
 
 	/// <summary>
@@ -189,8 +180,7 @@ internal sealed partial class AudioPlaybackEngine : IAsyncDisposable
 			await using ReadOnlyAudioByteStream byteStream = _byteStreamFactory.Create(source);
 			AudioDecoder decoder = new(byteStream, _loggerFactory.CreateLogger<AudioDecoder>());
 
-			AudioDecoder? oldDecoder = _decoderRef.Replace(decoder);
-			oldDecoder?.Dispose();
+			_decoderResource.Replace(decoder);
 
 			if (track.StartPosition is TimeSpan startPosition)
 			{
@@ -216,8 +206,7 @@ internal sealed partial class AudioPlaybackEngine : IAsyncDisposable
 				}
 				
 				// Let the sink write any available frames before pausing and flushing.
-				await _pauseSignal.WaitAsync(t =>
-					Connection.Sink.FlushAsync(t), token);
+				await _pauseSignal.WaitAsync(ct => Connection.Sink.FlushAsync(ct), token);
 			}
 			
 			// Flush.
@@ -272,39 +261,10 @@ internal sealed partial class AudioPlaybackEngine : IAsyncDisposable
 	/// <summary>
 	/// Stops the current playback task and cancels any active decoding work.
 	/// </summary>
-	private async Task StopCoreAsync()
+	private Task StopCoreAsync()
 	{
 		_pauseSignal.Set();
-		
-		CancellationTokenSource? currentCts = Interlocked.Exchange(ref _playbackCts, null);
-
-		if (currentCts is not null)
-		{
-			try
-			{
-				await currentCts.CancelAsync();
-			}
-			catch
-			{
-				// Ignore.
-			}
-			
-			currentCts.Dispose();
-		}
-		
-		Task? currentPlaybackTask = Interlocked.Exchange(ref _playbackTask, null);
-
-		if (currentPlaybackTask is not null)
-		{
-			try
-			{
-				await currentPlaybackTask;
-			}
-			catch
-			{
-				// Ignore.
-			}
-		}
+		return _playback.StopAsync();
 	}
 
 	[LoggerMessage(LogLevel.Error, Message = "Playback failed for track {TrackId} {TrackTitle}")]

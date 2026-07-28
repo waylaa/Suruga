@@ -1,8 +1,6 @@
-﻿using Microsoft.Extensions.Options;
-using NetCord;
+﻿using NetCord;
 using Suruga.Audio.Events;
 using Suruga.Audio.Primitives;
-using Suruga.Options;
 using Suruga.Persistence;
 using Suruga.Primitives;
 using Suruga.Resolvers;
@@ -22,7 +20,7 @@ internal sealed class AudioPlayer : IAsyncDisposable
 	private readonly ulong _guildId;
 	private readonly TrackResolverRouter _resolverRouter;
 	private readonly TrackQueueStateRepository _repository;
-	private readonly AsyncLock _playbackLock = new();
+	private readonly AsyncMutex _playbackMutex = new();
 
 	private bool _isDisposed;
 
@@ -31,24 +29,18 @@ internal sealed class AudioPlayer : IAsyncDisposable
 		ulong guildId,
 		TrackResolverRouter resolverRouter,
 		AudioPlaybackEngine engine,
-		TrackQueueStateRepository repository,
-		IOptions<InvidiousCompanionOptions> invidiousCompanionOptions
+		TrackQueueStateRepository repository
 	)
 	{
 		_guildId = guildId;
 		_resolverRouter = resolverRouter;
 		_repository = repository;
-		Engine = engine;
-
-		TrackQueueState? queueState = null;
 		
-		if (invidiousCompanionOptions.Value.Enable)
-		{
-			queueState = repository.Load(guildId);
-		}
-
-		Queue = new TrackQueue(queueState);
+		Engine = engine;
 		Engine.TrackEnded += OnTrackEndedAsync;
+		
+		TrackQueueState? queueState = Task.Run(() => repository.Load(guildId)).Result;
+		Queue = new TrackQueue(queueState);
 	}
 
 	internal async Task<int> PlayAsync(string input, GuildUser requestedBy, CancellationToken token = default)
@@ -63,7 +55,7 @@ internal sealed class AudioPlayer : IAsyncDisposable
 			return 0;
 		}
 
-		using (await _playbackLock.EnterScopeAsync(token))
+		using (await _playbackMutex.EnterScopeAsync(token))
 		{
 			Queue.EnqueueRange(set.Tracks);
 			await SaveStateAsync(token);
@@ -93,7 +85,7 @@ internal sealed class AudioPlayer : IAsyncDisposable
 
 	internal async Task StopAsync(CancellationToken token = default)
 	{
-		using (await _playbackLock.EnterScopeAsync(token))
+		using (await _playbackMutex.EnterScopeAsync(token))
 		{
 			Queue.Clear();
 			await SaveStateAsync(token);
@@ -132,7 +124,7 @@ internal sealed class AudioPlayer : IAsyncDisposable
 	{
 		ObjectDisposedException.ThrowIf(_isDisposed, this);
 
-		using (await _playbackLock.EnterScopeAsync(token))
+		using (await _playbackMutex.EnterScopeAsync(token))
 		{
 			if (!Queue.TrySkip(out Track? nextTrack))
 			{
@@ -152,7 +144,7 @@ internal sealed class AudioPlayer : IAsyncDisposable
 	{
 		ObjectDisposedException.ThrowIf(_isDisposed, this);
 
-		using (await _playbackLock.EnterScopeAsync(token))
+		using (await _playbackMutex.EnterScopeAsync(token))
 		{
 			if (!Queue.TryMovePrevious(out Track? previousTrack))
 			{
@@ -169,7 +161,7 @@ internal sealed class AudioPlayer : IAsyncDisposable
 	{
 		ObjectDisposedException.ThrowIf(_isDisposed, this);
 
-		using (await _playbackLock.EnterScopeAsync(token))
+		using (await _playbackMutex.EnterScopeAsync(token))
 		{
 			// Cycle if no explicit loop mode is provided.
 			if (mode == default)
@@ -189,7 +181,7 @@ internal sealed class AudioPlayer : IAsyncDisposable
 	{
 		ObjectDisposedException.ThrowIf(_isDisposed, this);
 
-		using (await _playbackLock.EnterScopeAsync(token))
+		using (await _playbackMutex.EnterScopeAsync(token))
 		{
 			Queue.Shuffle();
 			await SaveStateAsync(token);
@@ -200,7 +192,7 @@ internal sealed class AudioPlayer : IAsyncDisposable
 	{
 		ObjectDisposedException.ThrowIf(_isDisposed, this);
 
-		using (await _playbackLock.EnterScopeAsync(token))
+		using (await _playbackMutex.EnterScopeAsync(token))
 		{
 			Queue.Clear();
             await _repository.RemoveAsync(_guildId, token);
@@ -226,7 +218,7 @@ internal sealed class AudioPlayer : IAsyncDisposable
 			// Ignore exceptions during disposal.
 		}
 
-		_playbackLock.Dispose();
+		_playbackMutex.Dispose();
 	}
 
 	/// <summary>
@@ -236,7 +228,7 @@ internal sealed class AudioPlayer : IAsyncDisposable
 	{
 		ObjectDisposedException.ThrowIf(_isDisposed, this);
 
-		using (await _playbackLock.EnterScopeAsync(token))
+		using (await _playbackMutex.EnterScopeAsync(token))
 		{
 			if (State is AudioPlaybackState.Playing)
 			{
@@ -269,7 +261,7 @@ internal sealed class AudioPlayer : IAsyncDisposable
 	{
 		try
 		{
-			using (await _playbackLock.EnterScopeAsync())
+			using (await _playbackMutex.EnterScopeAsync())
 			{
 				if (_isDisposed)
 				{
@@ -310,7 +302,7 @@ internal sealed class AudioPlayer : IAsyncDisposable
 		}
 	}
 	
-	private Task SaveStateAsync(CancellationToken token = default)
+	private async Task SaveStateAsync(CancellationToken token = default)
 	{
 		TrackQueueState state = new()
 		{
@@ -321,7 +313,7 @@ internal sealed class AudioPlayer : IAsyncDisposable
 			LoopMode = Queue.LoopMode,
 		};
 		
-		return Task.Run(async () => await _repository.SaveAsync(state, token), token);
+		await _repository.SaveAsync(state, token);
 	}
 
 	private static List<Track> GetNonLocalTracks(IEnumerable<Track> tracks)

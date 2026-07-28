@@ -2,6 +2,7 @@
 using NetCord.Gateway;
 using NetCord.Gateway.Voice;
 using NetCord.Logging;
+using Suruga.Audio.Primitives;
 using Suruga.Primitives;
 
 namespace Suruga.Audio;
@@ -9,7 +10,7 @@ namespace Suruga.Audio;
 /// <summary>
 /// Represents a managed connection to a Discord voice channel.
 /// </summary>
-internal sealed class AudioConnection : IAsyncDisposable
+internal sealed class AudioConnection : VolatileAsyncDisposable
 {
 	/// <summary>
 	/// Gets the audio sink used to write PCM samples to the voice connection.
@@ -24,10 +25,9 @@ internal sealed class AudioConnection : IAsyncDisposable
 	private readonly ulong _guildId;
 	private readonly GatewayClient _gatewayClient;
 	private readonly IVoiceLogger _voiceLogger;
-	
-	private VoiceClient? _voiceClient;
-	private Stream? _voiceStream;
-	private bool _isDisposed;
+
+	private readonly VolatileDisposableResource<VoiceClient> _voiceClientResource = new();
+	private readonly VolatileAsyncDisposableResource<Stream> _voiceStreamResource = new();
 
 	/// <summary>
 	/// Initializes a new audio connection for the specified guild.
@@ -49,12 +49,12 @@ internal sealed class AudioConnection : IAsyncDisposable
 	/// <param name="token">A cancellation token.</param>
 	internal async Task ConnectAsync(ulong voiceChannelId, CancellationToken token = default)
 	{
-		ObjectDisposedException.ThrowIf(_isDisposed, this);
+		ThrowIfDisposed();
 
 		if (Descriptor.IsValid &&
 		    Descriptor.VoiceChannelId == voiceChannelId &&
-		    _voiceClient is not null &&
-		    _voiceStream is not null)
+		    _voiceClientResource.Current is not null &&
+		    _voiceStreamResource.Current is not null)
 		{
 			return;
 		}
@@ -64,25 +64,7 @@ internal sealed class AudioConnection : IAsyncDisposable
 			new VoiceStateProperties(_guildId, voiceChannelId), cancellationToken: token);
 
 		await Descriptor.WaitUntilReadyAsync(token);
-
-		_voiceClient = new VoiceClient
-		(
-			Descriptor.UserId!.Value,
-			Descriptor.SessionId!,
-			Descriptor.Endpoint!,
-			Descriptor.GuildId!.Value,
-			Descriptor.VoiceChannelId!.Value,
-			Descriptor.Token!,
-			new VoiceClientConfiguration { Logger = _voiceLogger }
-		);
-
-		await _voiceClient.StartAsync(token);
-		await _voiceClient.EnterSpeakingStateAsync(new SpeakingProperties(SpeakingFlags.Microphone), cancellationToken: token);
-
-		Stream voiceStream = _voiceClient.CreateVoiceStream();
-		await TeardownVoiceStreamAsync(voiceStream); // Dispose old voice stream if it exists and replace _voiceStream with voiceStream.
-		
-		await Sink.AttachAsync(voiceStream, token);
+		await EstablishVoiceSessionAsync(token);
 	}
 
 	/// <summary>
@@ -91,15 +73,15 @@ internal sealed class AudioConnection : IAsyncDisposable
 	/// <param name="token">A cancellation token.</param>
 	internal async Task DisconnectAsync(CancellationToken token = default)
 	{
-		ObjectDisposedException.ThrowIf(_isDisposed, this);
+		ThrowIfDisposed();
 		
-		if (!Descriptor.IsValid || _voiceClient is null)
+		if (!Descriptor.IsValid || _voiceClientResource.Current is null)
 		{
 			return;
 		}
 
 		await Sink.DetachAsync(token);
-		await TeardownVoiceStreamAsync();
+		await _voiceStreamResource.ClearAsync();
 		await TeardownVoiceClientAsync(token);
 		
 		Descriptor.Invalidate();
@@ -115,7 +97,7 @@ internal sealed class AudioConnection : IAsyncDisposable
 	/// <param name="token">A cancellation token.</param>
 	internal async Task ReconnectAsync(CancellationToken token = default)
 	{
-		ObjectDisposedException.ThrowIf(_isDisposed, this);
+		ThrowIfDisposed();
 
 		if (!Descriptor.IsValid)
 		{
@@ -123,11 +105,20 @@ internal sealed class AudioConnection : IAsyncDisposable
 		}
 		
 		await Sink.DetachAsync(token);
-
-		await TeardownVoiceStreamAsync();
 		await TeardownVoiceClientAsync(token);
-		
-		_voiceClient = new VoiceClient
+		await EstablishVoiceSessionAsync(token);
+	}
+
+	protected override async ValueTask DisposeCoreAsync()
+	{
+		await Sink.DisposeAsync();
+		await _voiceStreamResource.ClearAsync();
+		await TeardownVoiceClientAsync(CancellationToken.None);
+	}
+
+	private async Task EstablishVoiceSessionAsync(CancellationToken token)
+	{
+		VoiceClient voiceClient = new
 		(
 			Descriptor.UserId!.Value,
 			Descriptor.SessionId!,
@@ -138,49 +129,20 @@ internal sealed class AudioConnection : IAsyncDisposable
 			new VoiceClientConfiguration { Logger = _voiceLogger }
 		);
 
-		await _voiceClient.StartAsync(token);
-		await _voiceClient.EnterSpeakingStateAsync(new SpeakingProperties(SpeakingFlags.Microphone), cancellationToken: token);
+		_voiceClientResource.Replace(voiceClient);
 
-		Stream voiceStream = _voiceClient.CreateVoiceStream();
-		await TeardownVoiceStreamAsync(voiceStream); // Dispose old voice stream if it exists and replace _voiceStream with voiceStream.
-		
+		await voiceClient.StartAsync(token);
+		await voiceClient.EnterSpeakingStateAsync(new SpeakingProperties(SpeakingFlags.Microphone), cancellationToken: token);
+
+		Stream voiceStream = voiceClient.CreateVoiceStream();
+		await _voiceStreamResource.ReplaceAsync(voiceStream);
+
 		await Sink.AttachAsync(voiceStream, token);
 	}
 
-	public async ValueTask DisposeAsync()
+	private async Task TeardownVoiceClientAsync(CancellationToken token)
 	{
-		if (_isDisposed)
-		{
-			return;
-		}
-		
-		_isDisposed = true;
-
-		await Sink.DisposeAsync();
-		await TeardownVoiceStreamAsync();
-		await TeardownVoiceClientAsync();
-	}
-
-	private async Task TeardownVoiceStreamAsync(Stream? newVoiceStream = null)
-	{
-		Stream? voiceStream = Interlocked.Exchange(ref _voiceStream, newVoiceStream);
-
-		if (voiceStream is not null)
-		{
-			try
-			{
-				await voiceStream.DisposeAsync();
-			}
-			catch
-			{
-				// Ignore.
-			}
-		}
-	}
-
-	private async Task TeardownVoiceClientAsync(CancellationToken token = default)
-	{
-		VoiceClient? currentVoiceClient = Interlocked.Exchange(ref _voiceClient, null);
+		VoiceClient? currentVoiceClient = _voiceClientResource.Current;
 
 		if (currentVoiceClient is not null)
 		{
@@ -192,11 +154,9 @@ internal sealed class AudioConnection : IAsyncDisposable
 			{
 				// Ignore.
 			}
-			finally
-			{
-				currentVoiceClient.Dispose();
-			}
 		}
+		
+		_voiceClientResource.Clear();
 	}
 
 	/// <summary>
@@ -207,9 +167,13 @@ internal sealed class AudioConnection : IAsyncDisposable
 		/// <summary>
 		/// Gets whether the descriptor contains a fully valid voice connection state.
 		/// </summary>
-		[MemberNotNullWhen(true, nameof(GuildId),
-			nameof(UserId), nameof(VoiceChannelId), nameof(Endpoint),
-			nameof(Token), nameof(SessionId))]
+		[MemberNotNullWhen(true,
+			nameof(GuildId),
+			nameof(UserId),
+			nameof(VoiceChannelId),
+			nameof(Endpoint),
+			nameof(Token),
+			nameof(SessionId))]
 		internal bool IsValid =>
 			GuildId.HasValue &&
 			UserId.HasValue &&
@@ -230,7 +194,7 @@ internal sealed class AudioConnection : IAsyncDisposable
 		
 		internal string? SessionId { get; private set; }
 		
-		private readonly Signal _readySignal = new();
+		private readonly AsyncManualResetEvent _readySignal = new();
 		private readonly Lock _lock = new();
 
 		internal AudioConnectionDescriptor()

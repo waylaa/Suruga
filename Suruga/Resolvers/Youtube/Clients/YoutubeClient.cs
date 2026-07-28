@@ -14,7 +14,7 @@ internal abstract class YoutubeClient(HttpClient client)
     /// </summary>
     protected readonly HttpClient Client = client;
 
-    private readonly AsyncLock _lock = new();
+    private readonly AsyncMutex _mutex = new();
 
     private string? _visitorData;
     
@@ -62,7 +62,7 @@ internal abstract class YoutubeClient(HttpClient client)
             return _visitorData;
         }
         
-        using (await _lock.EnterScopeAsync(token))
+        using (await _mutex.EnterScopeAsync(token))
         {
             using HttpRequestMessage request = new(HttpMethod.Get, "https://www.youtube.com/sw.js_data");
             request.Headers.Accept.ParseAdd("application/json");
