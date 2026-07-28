@@ -19,7 +19,8 @@ internal sealed class ManagedAudioFrameBuffer : IAudioFrameBuffer
 	/// </summary>
 	private int SampleCountInBytes => SampleCount * sizeof(float);
 
-	private IMemoryOwner<byte> _owner;
+	private readonly IMemoryOwner<byte> _owner;
+	
 	private bool _isDisposed;
 
     /// <summary>
