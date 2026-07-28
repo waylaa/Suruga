@@ -1,10 +1,8 @@
 ﻿using System.Runtime.InteropServices;
 using FFmpeg.AutoGen;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using Suruga.Logging;
 using Suruga.Options;
 
 namespace Suruga.Services;
@@ -12,12 +10,10 @@ namespace Suruga.Services;
 /// <summary>
 /// Initializes FFmpeg by locating native libraries at application startup.
 /// </summary>
-/// <param name="services">DI services.</param>
 /// <param name="options">Bot options.</param>
 /// <param name="logger">Logger.</param>
 internal sealed partial class FFmpegLoaderService
 (
-    IServiceProvider services,
     IOptions<BotOptions> options,
     ILogger<FFmpegLoaderService> logger
 ) : IHostedService
@@ -39,8 +35,7 @@ internal sealed partial class FFmpegLoaderService
         
             CheckVersion();
             LogSuccessfulLoad();
-        
-            _ = services.GetRequiredService<FFmpegLogger>(); // Resolve this logger so that it actually works.
+            
             return Task.CompletedTask;
         }
         catch (Exception exception)

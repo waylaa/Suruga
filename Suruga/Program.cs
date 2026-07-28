@@ -125,7 +125,7 @@ internal sealed class Program
         services
             .AddMemoryCache()
             .AddHostedService<FFmpegLoaderService>()
-            .AddSingleton(sp => FFmpegLogger.Initialize(sp.GetRequiredService<ILogger<FFmpegLogger>>()))
+            .AddActivatedSingleton(sp => FFmpegLogger.Initialize(sp.GetRequiredService<ILogger<FFmpegLogger>>()))
             .AddSingleton<DatabaseClient>()
             .AddSingleton<TrackQueueStateRepository>()
             .AddHttpClient("youtube-bytestream").AddStandardResilienceHandler(CreateHttpResiliencePipeline).Services
