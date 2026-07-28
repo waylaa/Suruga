@@ -22,14 +22,14 @@ internal sealed partial class YoutubeReadOnlyAudioByteStream : ReadOnlyAudioByte
 	/// a HEAD request is issued once.
 	/// </remarks>
     /// <exception cref="ObjectDisposedException">The stream has been disposed.</exception>
-    public sealed override long Length => _currentFormat.ContentLength ?? (_fallbackLength ??= GetSegmentLength());
+    public override long Length => _currentFormat.ContentLength ?? (_fallbackLength ??= GetSegmentLength());
 
     /// <summary>Gets or sets the current position within the stream.</summary>
     /// <value>
     /// The position is automatically clamped between 0 and <see cref="Length"/>.
     /// </value>
     /// <exception cref="ObjectDisposedException">The stream has been disposed.</exception>
-    public sealed override long Position
+    public override long Position
 	{
 		get;
 		set => field = Math.Clamp(value, 0, Length);
@@ -96,7 +96,7 @@ internal sealed partial class YoutubeReadOnlyAudioByteStream : ReadOnlyAudioByte
     /// <param name="buffer">The span to write the read bytes into.</param>
     /// <returns>The number of bytes read, or 0 if the end of the stream is reached.</returns>
     /// <exception cref="InvalidOperationException">All formats and retries have been exhausted.</exception>
-    public sealed override int Read(Span<byte> buffer)
+    public override int Read(Span<byte> buffer)
 	{
 		if (buffer.IsEmpty || Position >= Length)
 		{
@@ -125,7 +125,7 @@ internal sealed partial class YoutubeReadOnlyAudioByteStream : ReadOnlyAudioByte
 				LogBuffering(Position.ToFormattedBytes(), Length.ToFormattedBytes());
 				return bytesToRead;
 			}
-			catch (IOException ex)
+			catch (Exception ex)
 			{
 				_consecutiveErrors++;
 				LogIoWarning(ex, ex.Message);
@@ -148,7 +148,7 @@ internal sealed partial class YoutubeReadOnlyAudioByteStream : ReadOnlyAudioByte
     /// <param name="origin">The reference point used to obtain the new position.</param>
     /// <returns>The new position, clamped between 0 and <see cref="Length"/>.</returns>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="origin"/> is invalid.</exception>
-    public sealed override long Seek(long offset, SeekOrigin origin)
+    public override long Seek(long offset, SeekOrigin origin)
 	{
 		long newPosition = origin switch
 		{
@@ -270,7 +270,7 @@ internal sealed partial class YoutubeReadOnlyAudioByteStream : ReadOnlyAudioByte
 		response.EnsureSuccessStatusCode();
 		
 		using Stream networkStream = response.Content.ReadAsStream();
-		networkStream.ReadExactly(buffer.Span.Slice(0, expectedBytes));
+		networkStream.ReadExactly(buffer.Span[..expectedBytes]);
 		
 		return expectedBytes;
 	}
