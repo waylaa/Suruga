@@ -1,6 +1,6 @@
 ﻿using System.Collections.Concurrent;
 
-namespace Suruga.Primitives;
+namespace Suruga.Commands.Autocomplete;
 
 /// <summary>
 /// Prevents a function from being invoked too frequently by delaying execution and
