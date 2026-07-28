@@ -78,9 +78,9 @@ internal sealed partial class AudioDecoder : IDisposable
             
                 frame = _resamplerContext.Resample(_frame);
 
-                // UnmanagedAudioFrameBuffer holds the underlying Frame object
-                // and unreferences it when disposed after writing samples to voice
-                // or when post-processing.
+                // UnmanagedAudioFrameBuffer points to the underlying AVFrame's
+                // audio buffer and unreferences it when disposed after writing
+                // samples to voice or when post-processing instead of right now.
                 if (frame is ManagedAudioFrameBuffer)
                 {
                     _frame.Unreference();
