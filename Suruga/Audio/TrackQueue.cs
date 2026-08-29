@@ -1,5 +1,5 @@
-﻿using System.Diagnostics.CodeAnalysis;
-using System.Runtime.InteropServices;
+﻿using System.Collections.ObjectModel;
+using System.Diagnostics.CodeAnalysis;
 using Suruga.Audio.Primitives;
 using Suruga.Persistence;
 using Suruga.Primitives;
@@ -8,217 +8,153 @@ namespace Suruga.Audio;
 
 internal sealed class TrackQueue
 {
-	internal IReadOnlyList<Track> History => _history.AsReadOnly();
-	
-	internal IReadOnlyList<Track> Upcoming => _upcoming.AsReadOnly();
+    internal IReadOnlyList<Track> Next => _currentIndex >= 0
+        ? _tracks[(_currentIndex + 1)..]
+        : ReadOnlyCollection<Track>.Empty;
 
-	internal bool HasCurrent => CurrentTrack is not null;
+    internal IReadOnlyList<Track> Previous => _currentIndex > 0
+        ? _tracks[.._currentIndex]
+        : ReadOnlyCollection<Track>.Empty;
 
-	internal bool HasPrevious => _history.Count > 0;
-	
-	private bool IsTrackLooping => LoopMode is LoopMode.PerTrack;
+    internal Track? CurrentTrack => _currentIndex >= 0 ? _tracks[_currentIndex] : null;
+    
+    internal bool HasCurrent => _currentIndex >= 0;
 
-	private bool IsQueueLooping => LoopMode is LoopMode.PerQueue;
+    internal bool HasNext => LoopMode switch
+    {
+        LoopMode.Track => _currentIndex >= 0,
+        LoopMode.Queue => _currentIndex >= 0 && _tracks.Count > 0,
+        _ => _currentIndex >= 0 && _currentIndex < _tracks.Count - 1
+    };
+    
+    internal bool HasPrevious => _currentIndex > 0;
 
-	internal bool HasNext
-	{
-		get
-		{
-			if (IsTrackLooping)
-			{
-				return CurrentTrack is not null;
-			}
+    internal LoopMode LoopMode { get; set; }
 
-			if (_upcoming.Count > 0)
-			{
-				return true;
-			}
+    private readonly TrackQueueStateRepository _repository;
+    private readonly ulong _guildId;
+    
+    private readonly List<Track> _tracks;
+    
+    private int _currentIndex;
 
-			return IsQueueLooping && _history.Count > 0;
-		}
-	}
-	
-	internal Track? CurrentTrack { get; private set; }
+    internal TrackQueue(TrackQueueStateRepository repository, ulong guildId)
+    {
+        _repository = repository;
+        _guildId = guildId;
+        
+        TrackQueueState? queueState = _repository.Load(guildId);
+        
+        _tracks = queueState?.Tracks ?? [];
+        _currentIndex = queueState?.CurrentIndex ?? -1;
+        LoopMode = queueState?.LoopMode ?? LoopMode.None;
+    }
 
-	internal LoopMode LoopMode { get; set; }
-
-	private readonly List<Track> _history = [];
-	private readonly List<Track> _upcoming = [];
-
-	internal TrackQueue(TrackQueueState? storedState)
-	{
-		if (storedState is null)
-		{
-			return;
-		}
-		
-		_history.AddRange(storedState.History);
-		_upcoming.AddRange(storedState.Upcoming);
-		
-		CurrentTrack = storedState.CurrentTrack;
-		LoopMode = storedState.LoopMode;
-
-        // Prevent duplicate current track after restoration.
-        if (CurrentTrack is not null)
+    internal void Add(Track track)
+    {
+        _tracks.Add(track);
+        
+        if (_currentIndex < 0)
         {
-            int index = _upcoming.FindIndex(track => TracksMatch(track, CurrentTrack));
-
-			if (index >= 0)
-			{
-				_upcoming.RemoveAt(index);
-			}
+            _currentIndex = 0;
         }
     }
-	
-	internal void EnqueueRange(IEnumerable<Track> tracks)
-		=> _upcoming.AddRange(tracks);
 
-	internal bool TryDequeue([NotNullWhen(true)] out Track? track)
-	{
-		track = null;
+    internal bool TryGetCurrent([NotNullWhen(true)] out Track? track)
+    {
+        if (_currentIndex < 0)
+        {
+            track = null;
+            return false;
+        }
+        
+        track = _tracks[_currentIndex];
+        return true;
+    }
 
-		if (CurrentTrack is not null || _upcoming.Count == 0)
-		{
-			return false;
-		}
+    internal bool TryMoveToNext(bool force = false)
+    {
+        if (_currentIndex < 0)
+        {
+            return false;
+        }
+        
+        if (LoopMode is LoopMode.Track && !force)
+        {
+            return true; // Leave the current track as is.
+        }
 
-		track = CurrentTrack = PopUpcomingTrack();
-		return true;
-	}
+        // Set the current track back to the first node if the current track is the
+        // last track playing and loop mode is set to per-queue.
+        if (LoopMode is LoopMode.Queue && _currentIndex == _tracks.Count - 1)
+        {
+            _currentIndex = _tracks.Count > 0 ? 0 : -1;
+            return _currentIndex >= 0;
+        }
+        
+        if (_currentIndex < _tracks.Count - 1)
+        {
+            _currentIndex++;
+            return true;
+        }
 
-	internal bool TrySkip([NotNullWhen(true)] out Track? nextTrack)
-	{
-		nextTrack = null;
+        return false;
+    }
 
-		if (CurrentTrack is null)
-		{
-			return false;
-		}
-		
-		_history.Add(CurrentTrack);
+    internal bool TryMoveToPrevious()
+    {
+        if (_currentIndex > 0)
+        {
+            _currentIndex--;
+            return true;
+        }
+        
+        return false;
+    }
 
-		if (_upcoming.Count == 0 && IsQueueLooping)
-		{
-			_upcoming.AddRange(_history);
-			_history.Clear();
-		}
+    internal bool TryShuffle()
+    {
+        int count = _tracks.Count;
 
-		if (_upcoming.Count == 0)
-		{
-			CurrentTrack = null;
-			return false;
-		}
+        if (count < 2)
+        {
+            return false;
+        }
 
-		nextTrack = CurrentTrack = PopUpcomingTrack();
-		return true;
-	}
+        Track? currentTrack = _currentIndex >= 0 ? _tracks[_currentIndex] : null;
+        List<Track> shuffled = _tracks.Shuffle().ToList();
 
-	internal bool TryMoveNext([NotNullWhen(true)] out Track? nextTrack)
-	{
-		nextTrack = null;
+        _tracks.Clear();
+        _tracks.AddRange(shuffled);
 
-		if (CurrentTrack is null)
-		{
-			return false;
-		}
+        _currentIndex = currentTrack is not null
+            ? _tracks.IndexOf(currentTrack)
+            : -1;
 
-		if (IsTrackLooping)
-		{
-			nextTrack = CurrentTrack;
-			return true;
-		}
-		
-		_history.Add(CurrentTrack);
+        return true;
+    }
 
-		if (_upcoming.Count == 0 && IsQueueLooping)
-		{
-			_upcoming.AddRange(_history);
-			_history.Clear();
-		}
+    internal bool TryClear()
+    {
+        if (_tracks.Count == 0)
+        {
+            return false;
+        }
+        
+        _tracks.Clear();
+        _currentIndex = -1;
+        
+        return true;
+    }
 
-		if (_upcoming.Count == 0)
-		{
-			CurrentTrack = null;
-			return false;
-		}
-		
-		nextTrack = CurrentTrack = PopUpcomingTrack();
-		return true;
-	}
-	
-	internal bool TryMovePrevious([NotNullWhen(true)] out Track? previousTrack)
-	{
-		previousTrack = null;
-
-		if (_history.Count == 0)
-		{
-			return false;
-		}
-
-		if (CurrentTrack is not null)
-		{
-			_upcoming.Insert(0, CurrentTrack);
-		}
-
-		int index = _history.Count - 1;
-
-		previousTrack = CurrentTrack = _history[index];
-		_history.RemoveAt(index);
-
-		return true;
-	}
-
-	internal void CycleLoopMode()
-	{
-		LoopMode = LoopMode switch
-		{
-			LoopMode.None => LoopMode.PerTrack,
-			LoopMode.PerTrack => LoopMode.PerQueue,
-			_ => LoopMode.None
-		};
-	}
-
-	internal void Shuffle()
-	{
-		if (_upcoming.Count <= 1)
-		{
-			return;
-		}
-		
-		Random.Shared.Shuffle(CollectionsMarshal.AsSpan(_upcoming));
-	}
-
-	/// <summary>
-	/// Moves <see cref="CurrentTrack"/> into <see cref="_history"/> so a new track can be dequeued.
-	/// </summary>
-	internal void ArchiveCurrentTrack()
-	{
-		if (CurrentTrack is null)
-		{
-			return;
-		}
-
-		_history.Add(CurrentTrack);
-		CurrentTrack = null;
-	}
-
-	internal void Clear()
-	{
-		_history.Clear();
-		_upcoming.Clear();
-		
-		CurrentTrack = null;
-		LoopMode = LoopMode.None;
-	}
-
-	private Track PopUpcomingTrack()
-	{
-		Track track = _upcoming[0];
-		_upcoming.RemoveAt(0);
-		
-		return track;
-	}
-
-	private static bool TracksMatch(Track? a, Track? b)
-		=> a?.Platform == b?.Platform && a?.Id == b?.Id && a?.Uri == b?.Uri;
+    internal async Task SaveAsync(CancellationToken token = default)
+    {
+        await _repository.SaveAsync(new TrackQueueState
+        {
+            GuildId = _guildId,
+            Tracks = _tracks,
+            CurrentIndex = _currentIndex,
+            LoopMode = LoopMode
+        }, token);
+    }
 }

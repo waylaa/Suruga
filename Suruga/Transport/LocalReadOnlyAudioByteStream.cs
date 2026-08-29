@@ -1,6 +1,6 @@
 ﻿using Microsoft.Extensions.Logging;
 using Microsoft.Win32.SafeHandles;
-using Suruga.Extensions;
+using Suruga.Transport.Extensions;
 
 namespace Suruga.Transport;
 

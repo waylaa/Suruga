@@ -14,8 +14,6 @@ internal abstract class YoutubeClient(HttpClient client)
     /// </summary>
     protected readonly HttpClient Client = client;
 
-    private readonly AsyncMutex _mutex = new();
-
     private string? _visitorData;
     
     /// <summary>
@@ -62,28 +60,25 @@ internal abstract class YoutubeClient(HttpClient client)
             return _visitorData;
         }
         
-        using (await _mutex.EnterScopeAsync(token))
+        using HttpRequestMessage request = new(HttpMethod.Get, "https://www.youtube.com/sw.js_data");
+        request.Headers.Accept.ParseAdd("application/json");
+
+        using HttpResponseMessage response = await Client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token);
+        response.EnsureSuccessStatusCode();
+
+        string jsonString = await response.Content.ReadAsStringAsync(token);
+
+        if (jsonString.StartsWith(")]}'"))
         {
-            using HttpRequestMessage request = new(HttpMethod.Get, "https://www.youtube.com/sw.js_data");
-            request.Headers.Accept.ParseAdd("application/json");
-
-            using HttpResponseMessage response = await Client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token);
-            response.EnsureSuccessStatusCode();
-
-            string jsonString = await response.Content.ReadAsStringAsync(token);
-
-            if (jsonString.StartsWith(")]}'"))
-            {
-                jsonString = jsonString[4..];
-            }
-
-            using JsonDocument json = JsonDocument.Parse(jsonString); 
-
-            // This is just an ordered (but unstructured) blob of data.
-            // (https://github.com/Tyrrrz/YoutubeExplode/blob/prime/YoutubeExplode/Videos/VideoController.cs#L18)
-            string value = json.RootElement[0][2][0][0][13].GetString() ?? string.Empty;
-
-            return _visitorData = value;
+            jsonString = jsonString[4..];
         }
+
+        using JsonDocument json = JsonDocument.Parse(jsonString); 
+
+        // This is just an ordered (but unstructured) blob of data.
+        // (https://github.com/Tyrrrz/YoutubeExplode/blob/prime/YoutubeExplode/Videos/VideoController.cs#L18)
+        string value = json.RootElement[0][2][0][0][13].GetString() ?? string.Empty;
+
+        return _visitorData = value;
     }
 }

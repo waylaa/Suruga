@@ -2,8 +2,9 @@
 using System.Net;
 using System.Net.Http.Headers;
 using Microsoft.Extensions.Logging;
-using Suruga.Extensions;
 using Suruga.Primitives;
+using Suruga.Resolvers.Primitives;
+using Suruga.Transport.Extensions;
 
 namespace Suruga.Transport;
 

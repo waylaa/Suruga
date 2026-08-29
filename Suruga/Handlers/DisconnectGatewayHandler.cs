@@ -13,6 +13,6 @@ internal sealed class DisconnectGatewayHandler(AudioSessionManager sessionManage
             return;
         }
 
-        await sessionManager.RemoveAllSessionsAsync();
+        await sessionManager.DisconnectAllSessionsAsync();
     }
 }

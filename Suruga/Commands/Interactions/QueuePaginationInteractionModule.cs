@@ -18,7 +18,7 @@ internal sealed class QueuePaginationInteractionModule
 	public async Task ShowPreviousPage()
 	{
 		if (!sessionManager.TryGetSession(Context.Guild!.Id, out AudioSession? session) ||
-		    await GetPaginatorStateAsync() is not PaginatorSession<Track> state)
+		    !paginatorManager.TryGet(Context.Guild!.Id, out PaginatorSession<Track>? state))
 		{
 			return;
 		}
@@ -31,18 +31,13 @@ internal sealed class QueuePaginationInteractionModule
 	public async Task ShowNextPage()
 	{
 		if (!sessionManager.TryGetSession(Context.Guild!.Id, out AudioSession? session) ||
-		    await GetPaginatorStateAsync() is not PaginatorSession<Track> state)
+		    !paginatorManager.TryGet(Context.Guild!.Id, out PaginatorSession<Track>? state))
 		{
 			return;
 		}
 		
 		state.Paginator.MoveToNextPage();
 		await ModifyPaginatedMessageAsync(session.Player.Queue.CurrentTrack, state.Paginator);
-	}
-	
-	private async Task<PaginatorSession<Track>?> GetPaginatorStateAsync()
-	{
-		return paginatorManager.TryGet(Context.Guild!.Id, out PaginatorSession<Track>? state) ? state : null;
 	}
 
 	private async Task ModifyPaginatedMessageAsync(Track? currentTrack, Paginator<Track> paginator)

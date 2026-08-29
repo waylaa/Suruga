@@ -3,7 +3,8 @@ using System.Text.Json;
 using Microsoft.Extensions.Caching.Memory;
 using Suruga.Primitives;
 using System.Web;
-using Suruga.Extensions;
+using Suruga.Resolvers.Extensions;
+using Suruga.Resolvers.Primitives;
 using Suruga.Resolvers.Youtube.Clients;
 
 namespace Suruga.Resolvers.Youtube;

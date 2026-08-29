@@ -1,6 +1,7 @@
 ﻿using NetCord.Gateway;
 using NetCord.Hosting.Gateway;
 using Suruga.Audio;
+using Suruga.Audio.Commands.Playback;
 using Suruga.Audio.Primitives;
 
 namespace Suruga.Handlers;
@@ -41,18 +42,18 @@ internal sealed class AutoPauseResumeVoiceStateUpdateGatewayHandler
         if (arg.IsMuted)
 		{
             // Auto-pause when server-muted.
-            if (player.State is not AudioPlaybackState.Paused)
-			{
-				await player.PauseAsync();
-			}
+            if (player.State is not AudioPlayerState.Paused)
+            {
+	            await player.PostAsync(new PauseAudioCommand());
+            }
 		}
 		else
 		{
             // Auto-resume when unmuted.
-            if (player.State is AudioPlaybackState.Paused)
-			{
-				await player.ResumeAsync();
-			}
+            if (player.State is AudioPlayerState.Paused)
+            {
+	            await player.PostAsync(new ResumeAudioCommand());
+            }
 		}
 	}
 }

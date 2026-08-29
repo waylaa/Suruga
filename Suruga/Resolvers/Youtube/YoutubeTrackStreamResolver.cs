@@ -1,8 +1,10 @@
 ﻿using System.Collections.ObjectModel;
 using System.Text.Json;
 using Microsoft.Extensions.Caching.Memory;
-using Suruga.Extensions;
 using Suruga.Primitives;
+using Suruga.Resolvers.Extensions;
+using Suruga.Resolvers.Primitives;
+using Suruga.Resolvers.Sources;
 using Suruga.Resolvers.Youtube.Clients;
 
 namespace Suruga.Resolvers.Youtube;

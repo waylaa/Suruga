@@ -14,21 +14,13 @@ public sealed record TrackQueueState
     /// </summary>
     [BsonId]
 	public required ulong GuildId { get; init; }
-
-    /// <summary>
-    /// Gets the tracks that have already been played.
-    /// </summary>
-    public required List<Track> History { get; init; }
-
-    /// <summary>
-    /// Gets the tracks scheduled to be played next.
-    /// </summary>
-    public required List<Track> Upcoming { get; init; }
+    
+    public required List<Track> Tracks { get; init; }
 
     /// <summary>
     /// Gets the track that is currently playing.
     /// </summary>
-    public required Track? CurrentTrack { get; init; }
+    public required int CurrentIndex { get; init; }
 
     /// <summary>
     /// Gets the loop mode applied to the queue.

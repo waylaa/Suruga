@@ -5,10 +5,22 @@ namespace Suruga.Primitives;
 /// <summary>
 /// Represents the context of the user who requested a track, including their display name and avatar.
 /// </summary>
-/// <param name="Username">The display name of the user who requested the track.</param>
-/// <param name="AvatarUrl">The URL of the user's avatar.</param>
-public readonly record struct TrackRequestContext(string Username, string AvatarUrl)
+public sealed record TrackRequestContext
 {
+	public string Name { get; }
+	
+	public string AvatarUrl { get; }
+	
+	/// <summary>
+	/// </summary>
+	/// <param name="name">The display name of the user who requested the track.</param>
+	/// <param name="avatarUrl">The URL of the user's avatar.</param>
+	private TrackRequestContext(string name, string avatarUrl)
+	{
+		Name = name;
+		AvatarUrl = avatarUrl;
+	}
+	
     /// <summary>
     /// Creates a new <see cref="TrackRequestContext"/> from a guild user, 
     /// resolving the most appropriate display name and avatar URL.

@@ -127,7 +127,10 @@ internal sealed class InactivityTrackVoiceStateUpdateGatewayHandler
 
 			if (connectedUsers == 0)
 			{
-				await sessionManager.TryRemoveSessionAsync(guildId);
+				if (sessionManager.TryRemoveSession(guildId, out AudioSession? session))
+				{
+					await session.DisposeAsync();
+				}
 			}
 		}
 		catch (TaskCanceledException)

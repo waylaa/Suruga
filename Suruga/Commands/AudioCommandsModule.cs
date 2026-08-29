@@ -5,22 +5,30 @@ using NetCord.Services.ApplicationCommands;
 using Suruga.Audio;
 using Suruga.Audio.Primitives;
 using Suruga.Commands.Autocomplete;
-using Suruga.Extensions;
 using Suruga.Helpers;
 using Suruga.Pagination;
 using Suruga.Primitives;
 using System.Globalization;
+using Suruga.Audio.Commands.Connection;
+using Suruga.Audio.Commands.Playback;
+using Suruga.Resolvers;
 
 namespace Suruga.Commands;
 
-internal sealed class AudioCommandsModule(AudioSessionManager sessionManager, PaginatorManager paginatorManager) : ApplicationCommandModule<ApplicationCommandContext>
+internal sealed class AudioCommandsModule
+(
+    TrackResolverRouter router,
+    AudioSessionManager sessionManager,
+    PaginatorManager paginatorManager
+) : ApplicationCommandModule<ApplicationCommandContext>
 {
     [SlashCommand("play", "Attempts to play a track or URL.", Contexts = [InteractionContextType.Guild])]
     public async Task PlayAsync([SlashCommandParameter(AutocompleteProviderType = typeof(TrackResultsAutocompleteProvider))] string query)
     {
         Guild guild = Context.Guild!;
         
-        if (!guild.VoiceStates.TryGetValue(Context.User.Id, out VoiceState? userVoiceState) || userVoiceState.ChannelId is not ulong voiceChannelId)
+        if (!guild.VoiceStates.TryGetValue(Context.User.Id, out VoiceState? userVoiceState) ||
+            userVoiceState.ChannelId is not ulong voiceChannelId)
         {
             await RespondAsync(InteractionCallback.Message("You must be connected to a voice channel."));
             return;
@@ -32,54 +40,61 @@ internal sealed class AudioCommandsModule(AudioSessionManager sessionManager, Pa
             return;
         }
         
-        AudioSession session = sessionManager.GetOrCreateSession(Context.Client, guild.Id, Context.Channel.Id);
+        AudioSession session = sessionManager.GetOrCreateSession(guild.Id, Context.Channel.Id);
+        ulong? boundChannelId = session.PlayerMessage.BoundChannelId;
         
-        if (Context.Channel.Id != session.TextChannelId)
+        if (Context.Channel.Id != boundChannelId && boundChannelId is ulong channelId)
         {
-            string name = guild.Channels[session.TextChannelId].Name;
+            string name = guild.Channels[channelId].Name;
             await RespondAsync(InteractionCallback.Message($"Use music commands in #{name}."));
         }
 
         await RespondAsync(InteractionCallback.DeferredMessage());
         
-        AudioPlayer player = session.Player;
+        TrackRequestContext requestContext = TrackRequestContext.FromUser((GuildUser)Context.User);
+        Result<TrackSet> resolveResult = await router.ResolveAsync(query, requestContext);
 
-        await player.Engine.Connection.ConnectAsync(voiceChannelId);
-        int tracksQueued = await player.PlayAsync(query, (GuildUser)Context.User);
-
-        if (tracksQueued == 0)
+        if (!resolveResult.TryGetValue(out TrackSet? set))
         {
             await FollowupAsync($"Could not play: {query}");
             return;
         }
-        
-        if (player.State is AudioPlaybackState.Playing or AudioPlaybackState.Paused && player.Queue.HasNext)
+
+        if (set.IsEmpty)
         {
-            // Re-create player message if it does not exist but a current track is playing.
-            // This can happen because the player message is not persistently stored.
-            if (!session.PlayerMessage.HasMessage && player.Queue.CurrentTrack is Track track)
-            {
-                RestMessage message = await CreatePlayerMessageAsync(Context.Interaction, track, player.State is AudioPlaybackState.Paused);
-                session.PlayerMessage.Set(message);
-                
-                return;
-            }
-            
-            // Else, reply with a 'Queued N tracks' message if the player is playing/paused and a queue exists.
-            await FollowupAsync(tracksQueued > 1 ? $"Queued {tracksQueued} tracks." : "Queued 1 track.");
+            await FollowupAsync($"Could not find any tracks for: {query}");
             return;
         }
 
-        // If the player is playing/idle and there is only a single current track that may
-        // be playing, then re-create the player message as there is no queue to depend
-        // on a long-running player message.
-        if (player.State is AudioPlaybackState.Playing or AudioPlaybackState.Idle &&
-            player is { Queue: { CurrentTrack: Track nonQueuedTrack, HasCurrent: true, HasNext: false } })
+        AudioConnection connection = session.Connection;
+        AudioPlayer player = session.Player;
+
+        CommandResult connectionResult = await connection.PostAsync(new ConnectCommand(voiceChannelId));
+
+        if (connectionResult.Status is CommandStatus.InvalidVoice)
         {
-            await session.PlayerMessage.InvalidateAsync();
-            
-            RestMessage message = await CreatePlayerMessageAsync(Context.Interaction, nonQueuedTrack, player.State is AudioPlaybackState.Paused);
-            session.PlayerMessage.Set(message);
+            await FollowupAsync("Failed to connect to voice channel.");
+            return;
+        }
+
+        bool wasNotIdle = player.State is not AudioPlayerState.Idle;
+        
+        if (!session.PlayerMessage.HasMessage || (session.PlayerMessage.HasMessage && player.State is AudioPlayerState.Idle))
+        {
+            await session.PlayerMessage.SetAsync(Context.Interaction, player.State);
+        }
+        
+        CommandResult playerResult = await player.PostAsync(new PlayAudioCommand(set));
+
+        if (playerResult.Status is CommandStatus.NoTracks)
+        {
+            await FollowupAsync($"Could not find any tracks for: {query}");
+            return;
+        }
+
+        if (session.PlayerMessage.HasMessage && player.Queue.HasNext && wasNotIdle)
+        {
+            await FollowupAsync(set.Count > 1 ? $"Queued {set.Count} tracks." : "Queued 1 track.");
         }
     }
 
@@ -88,17 +103,30 @@ internal sealed class AudioCommandsModule(AudioSessionManager sessionManager, Pa
     {
         Guild guild = Context.Guild!;
         
-        if (await GetAudioSessionAsync() is not AudioSession session)
+        if (await GetAudioSessionAsync() is null)
         {
             return;
         }
+        
+        await RespondAsync(InteractionCallback.DeferredMessage());
 
         VoiceState voiceState = guild.VoiceStates[Context.Client.Id];
         string voiceChannelName = guild.Channels[voiceState.ChannelId.GetValueOrDefault()].Name;
+        
+        if (!sessionManager.TryRemoveSession(guild.Id, out AudioSession? session))
+        {
+            await FollowupAsync($"Audio session failure in {voiceChannelName}.");
+            return;
+        }
+        
+        AudioConnection connection = session.Connection;
+        await connection.PostAsync(new DisconnectCommand());
 
-        await session.Player.Engine.Connection.DisconnectAsync();
-        await sessionManager.TryRemoveSessionAsync(guild.Id);
-        await RespondAsync(InteractionCallback.Message($"Left {voiceChannelName}."));
+        AudioPlayer player = session.Player;
+        await player.PostAsync(new StopAudioCommand());
+        
+        await session.DisposeAsync();
+        await FollowupAsync($"Left {voiceChannelName}.");
     }
 
     [SlashCommand("stop", "Stops current track.", Contexts = [InteractionContextType.Guild])]
@@ -108,15 +136,19 @@ internal sealed class AudioCommandsModule(AudioSessionManager sessionManager, Pa
         {
             return;
         }
+        
+        await RespondAsync(InteractionCallback.DeferredMessage());
+        CommandResult result = await session.Player.PostAsync(new StopAudioCommand());
 
-        if (session.Player.State is AudioPlaybackState.Playing)
+        switch (result.Status)
         {
-            await session.Player.StopAsync();
-            await RespondAsync(InteractionCallback.Message("Playback stopped."));
-        }
-        else
-        {
-            await RespondAsync(InteractionCallback.Message("There is nothing to stop."));
+            case CommandStatus.Success:
+                await FollowupAsync("Playback stopped.");
+                break;
+            
+            case CommandStatus.AlreadyStopped:
+                await FollowupAsync("There is nothing to stop.");
+                break;
         }
     }
 
@@ -127,15 +159,23 @@ internal sealed class AudioCommandsModule(AudioSessionManager sessionManager, Pa
         {
             return;
         }
+        
+        await RespondAsync(InteractionCallback.DeferredMessage());
+        CommandResult result = await session.Player.PostAsync(new PauseAudioCommand());
 
-        if (session.Player.State is AudioPlaybackState.Playing)
+        switch (result.Status)
         {
-            await session.Player.PauseAsync();
-            await RespondAsync(InteractionCallback.Message("Playback paused."));
-        }
-        else
-        {
-            await RespondAsync(InteractionCallback.Message("There is nothing to pause."));
+            case CommandStatus.Success:
+                await FollowupAsync("Playback paused.");
+                break;
+            
+            case CommandStatus.AlreadyPaused:
+                await FollowupAsync("I am already paused.");
+                break;
+            
+            case CommandStatus.NothingToPause:
+                await FollowupAsync("There is nothing to pause.");
+                break;
         }
     }
 
@@ -149,32 +189,46 @@ internal sealed class AudioCommandsModule(AudioSessionManager sessionManager, Pa
             await RespondAsync(InteractionCallback.Message("You must be connected to a voice channel."));
             return;
         }
+        
+        await RespondAsync(InteractionCallback.DeferredMessage());
 
-        AudioSession session = sessionManager.GetOrCreateSession(Context.Client, guild.Id, Context.Channel.Id);
+        ulong voiceChannelId = userVoiceState.ChannelId.GetValueOrDefault();
+        AudioSession session = sessionManager.GetOrCreateSession(guild.Id, Context.Channel.Id);
+        AudioConnection connection = session.Connection;
         AudioPlayer player = session.Player;
+        
+        CommandResult connectionResult = await connection.PostAsync(new ConnectCommand(voiceChannelId));
 
-        if (player.State is AudioPlaybackState.Paused)
+        if (connectionResult.Status is CommandStatus.InvalidVoice)
         {
-            await player.ResumeAsync();
-            await RespondAsync(InteractionCallback.Message("Playback resumed."));
-
+            await FollowupAsync("Failed to connect to voice channel.");
             return;
         }
 
-        // If the player is idle and there's an existing queue/current track, start playback.
-        if (player.State is AudioPlaybackState.Idle && player.Queue is { HasCurrent: true, HasNext: true})
+        if (connectionResult.Status is not CommandStatus.AlreadyConnected)
         {
-            await player.Engine.Connection.ConnectAsync(userVoiceState.ChannelId!.Value);
-            bool hasStarted = await player.ResumeFromStoredQueueAsync();
-
-            if (hasStarted)
+            if (!session.PlayerMessage.HasMessage || (session.PlayerMessage.HasMessage && player.State is AudioPlayerState.Idle))
             {
-                await RespondAsync(InteractionCallback.Message("Resumed playback from the queue."));
-                return;
+                await session.PlayerMessage.SetAsync(Context.Interaction, player.State);
             }
         }
 
-        await RespondAsync(InteractionCallback.Message("There is nothing to resume."));
+        CommandResult result = await player.PostAsync(new ResumeAudioCommand());
+
+        switch (result.Status)
+        {
+            case CommandStatus.Success:
+                await FollowupAsync("Playback resumed.");
+                break;
+            
+            case CommandStatus.AlreadyPlaying:
+                await FollowupAsync("I am already resumed.");
+                break;
+            
+            case CommandStatus.NothingToResume:
+                await FollowupAsync("There is nothing to resume.");
+                break;
+        }
     }
     
     [SlashCommand("skip", "Skips current track.", Contexts = [InteractionContextType.Guild])]
@@ -185,16 +239,17 @@ internal sealed class AudioCommandsModule(AudioSessionManager sessionManager, Pa
             return;
         }
         
+        await RespondAsync(InteractionCallback.DeferredMessage());
         AudioPlayer player = session.Player;
         
-        if (player.State is AudioPlaybackState.Playing or AudioPlaybackState.Paused)
+        if (player.State is AudioPlayerState.Playing or AudioPlayerState.Paused)
         {
-            await session.Player.SkipAsync();
-            await RespondAsync(InteractionCallback.Message("Skipped current track."));
+            await session.Player.PostAsync(new SkipAudioCommand());
+            await FollowupAsync("Skipped current track.");
         }
         else
         {
-            await RespondAsync(InteractionCallback.Message("There is nothing to skip."));
+            await FollowupAsync("There is nothing to skip.");
         }
     }
 
@@ -206,16 +261,17 @@ internal sealed class AudioCommandsModule(AudioSessionManager sessionManager, Pa
             return;
         }
 
+        await RespondAsync(InteractionCallback.DeferredMessage());
         AudioPlayer player = session.Player;
 
-        if (player.State is AudioPlaybackState.Playing or AudioPlaybackState.Paused && player.Queue.HasPrevious)
+        if (player.State is AudioPlayerState.Playing or AudioPlayerState.Paused && player.Queue.HasPrevious)
         {
-            await session.Player.RewindAsync();
-            await RespondAsync(InteractionCallback.Message("Rewound to previous track."));
+            await session.Player.PostAsync(new RewindAudioCommand());
+            await FollowupAsync("Rewound to previous track.");
         }
         else
         {
-            await RespondAsync(InteractionCallback.Message("There is no previous track to rewind to."));
+            await FollowupAsync("There is no previous track to rewind to.");
         }
     }
 
@@ -232,28 +288,32 @@ internal sealed class AudioCommandsModule(AudioSessionManager sessionManager, Pa
             await RespondAsync(InteractionCallback.Message("Timestamp must be in HH:MM:SS format."));
             return;
         }
+        
+        await RespondAsync(InteractionCallback.DeferredMessage());
 
-        if (session.Player.State is AudioPlaybackState.Playing or AudioPlaybackState.Paused)
+        if (session.Player.State is not AudioPlayerState.Idle)
         {
-            session.Player.Seek(time);
-            await RespondAsync(InteractionCallback.Message($"Seeking to {timestamp}"));
+            await session.Player.PostAsync(new SeekAudioCommand(time));
+            await FollowupAsync($"Seeking to {timestamp}");
         }
         else
         {
-            await RespondAsync(InteractionCallback.Message("There is nothing to seek."));
+            await FollowupAsync("No track is currently playing to seek.");
         }
     }
 
     [SlashCommand("loop", "Loops current track.", Contexts = [InteractionContextType.Guild])]
-    public async Task LoopAsync(LoopMode mode = default)
+    public async Task LoopAsync(LoopMode? mode = null)
     {
         if (await GetAudioSessionAsync() is not AudioSession session)
         {
             return;
         }
 
-        await session.Player.LoopAsync(mode);
-        await RespondAsync(InteractionCallback.Message($"Loop mode set to {session.Player.Queue.LoopMode.GetDescription()}."));
+        await RespondAsync(InteractionCallback.DeferredMessage());
+        
+        CommandResult result = await session.Player.PostAsync(new LoopAudioCommand(mode));
+        await FollowupAsync($"Loop mode set to {result.Data}.");
     }
 
     [SlashCommand("queue", "List queued tracks.", Contexts = [InteractionContextType.Guild])]
@@ -264,7 +324,7 @@ internal sealed class AudioCommandsModule(AudioSessionManager sessionManager, Pa
             return;
         }
 
-        IReadOnlyList<Track> queue = session.Player.Queue.Upcoming;
+        IReadOnlyList<Track> queue = session.Player.Queue.Next;
         PaginatorSession<Track> paginatorSession = new(new Paginator<Track>(queue, 10));
 
         EmbedProperties embed = EmbedHelper.Queue(session.Player.Queue.CurrentTrack, (GuildUser)Context.User, paginatorSession.Paginator);
@@ -287,7 +347,7 @@ internal sealed class AudioCommandsModule(AudioSessionManager sessionManager, Pa
             return;
         }
 
-        IReadOnlyList<Track> history = session.Player.Queue.History;
+        IReadOnlyList<Track> history = session.Player.Queue.Previous;
         PaginatorSession<Track> paginatorSession = new(new Paginator<Track>(history, 10));
         EmbedProperties embed = EmbedHelper.History((GuildUser)Context.User, paginatorSession.Paginator);
         
@@ -308,16 +368,17 @@ internal sealed class AudioCommandsModule(AudioSessionManager sessionManager, Pa
         {
             return;
         }
+        
+        await RespondAsync(InteractionCallback.DeferredMessage());
+        CommandResult result = await session.Player.PostAsync(new ShuffleAudioCommand());
 
-        if (session.Player.State is AudioPlaybackState.Playing && session.Player.Queue.HasNext)
+        if (result.Status is CommandStatus.NotEnoughTracksToShuffle)
         {
-            await session.Player.ShuffleAsync();
-            await RespondAsync(InteractionCallback.Message("Shuffled the queue."));
+            await FollowupAsync("There is nothing to shuffle.");
+            return;
         }
-        else
-        {
-            await RespondAsync(InteractionCallback.Message("There is nothing to shuffle."));
-        }
+        
+        await FollowupAsync("Shuffled the queue.");
     }
 
     [SlashCommand("clear", "Clears the queue.", Contexts = [InteractionContextType.Guild])]
@@ -327,9 +388,11 @@ internal sealed class AudioCommandsModule(AudioSessionManager sessionManager, Pa
         {
             return;
         }
-
-        await session.Player.ClearAsync();
-        await RespondAsync(InteractionCallback.Message("Queue cleared."));
+        
+        await RespondAsync(InteractionCallback.DeferredMessage());
+        
+        await session.Player.PostAsync(new ClearAudioCommand());
+        await FollowupAsync("Queue cleared.");
     }
 
     [SlashCommand("nowplaying", "Gets the currently playing track.", Contexts = [InteractionContextType.Guild])]
@@ -339,8 +402,10 @@ internal sealed class AudioCommandsModule(AudioSessionManager sessionManager, Pa
         {
             return;
         }
+        
+        AudioPlayer player = session.Player;
 
-        if (session.Player.Queue.CurrentTrack is not Track currentTrack)
+        if (!player.Queue.HasCurrent)
         {
             await RespondAsync(InteractionCallback.Message("Nothing is currently playing."));
             return;
@@ -352,9 +417,8 @@ internal sealed class AudioCommandsModule(AudioSessionManager sessionManager, Pa
         {
             await session.PlayerMessage.InvalidateAsync();
         }
-        
-        RestMessage message = await CreatePlayerMessageAsync(Context.Interaction, currentTrack, session.Player.State is AudioPlaybackState.Paused);
-        session.PlayerMessage.Set(message);
+
+        await session.PlayerMessage.SetAsync(Context.Interaction, player.State);
     }
     
     [SlashCommand("volume", "Set playback volume.", Contexts = [InteractionContextType.Guild])]
@@ -365,44 +429,52 @@ internal sealed class AudioCommandsModule(AudioSessionManager sessionManager, Pa
             return;
         }
 
-        session.Player.Engine.PostProcessor.SetGain(value / 100f);
-        await RespondAsync(InteractionCallback.Message($"Volume set to {value}%"));
+        await RespondAsync(InteractionCallback.DeferredMessage());
+        
+        await session.Player.PostAsync(new VolumeAudioCommand(value));
+        await FollowupAsync($"Volume set to {value}%");
     }
 
     [SlashCommand("speed", "Set playback speed.", Contexts = [InteractionContextType.Guild])]
-    public async Task SpeedAsync([SlashCommandParameter(MinValue = 0.25f, MaxValue = 2f)] float value)
+    public async Task SpeedAsync([SlashCommandParameter(MinValue = 0.25, MaxValue = 2)] double value)
     {
         if (await GetAudioSessionAsync() is not AudioSession session)
         {
             return;
         }
         
-        session.Player.Engine.PostProcessor.SetTempo(value);
-        await RespondAsync(InteractionCallback.Message($"Speed set to {value.ToString(CultureInfo.InvariantCulture)}x"));
+        await RespondAsync(InteractionCallback.DeferredMessage());
+        
+        await session.Player.PostAsync(new SpeedAudioCommand(value));
+        await FollowupAsync($"Speed set to {value.ToString(CultureInfo.InvariantCulture)}x");
     }
 
     [SlashCommand("pitch", "Set playback pitch.", Contexts = [InteractionContextType.Guild])]
-    public async Task PitchAsync([SlashCommandParameter(MinValue = 0.25f, MaxValue = 2f)] float value)
-    {
-        if (await GetAudioSessionAsync() is not AudioSession session)
-        {
-            return;
-        }
-
-        session.Player.Engine.PostProcessor.SetPitch(value);
-        await RespondAsync(InteractionCallback.Message($"Pitch set to {value.ToString(CultureInfo.InvariantCulture)}x"));
-    }
-
-    [SlashCommand("rate", "Set playback rate.", Contexts = [InteractionContextType.Guild])]
-    public async Task RateAsync([SlashCommandParameter(MinValue = 0.25f, MaxValue = 2f)] float value)
+    public async Task PitchAsync([SlashCommandParameter(MinValue = 0.25, MaxValue = 2)] double value)
     {
         if (await GetAudioSessionAsync() is not AudioSession session)
         {
             return;
         }
         
-        session.Player.Engine.PostProcessor.SetRate(value);
-        await RespondAsync(InteractionCallback.Message($"Rate set to {value.ToString(CultureInfo.InvariantCulture)}x"));
+        await RespondAsync(InteractionCallback.DeferredMessage());
+
+        await session.Player.PostAsync(new PitchAudioCommand(value));
+        await FollowupAsync($"Pitch set to {value.ToString(CultureInfo.InvariantCulture)}x");
+    }
+
+    [SlashCommand("rate", "Set playback rate.", Contexts = [InteractionContextType.Guild])]
+    public async Task RateAsync([SlashCommandParameter(MinValue = 0.25, MaxValue = 2)] double value)
+    {
+        if (await GetAudioSessionAsync() is not AudioSession session)
+        {
+            return;
+        }
+        
+        await RespondAsync(InteractionCallback.DeferredMessage());
+        
+        await session.Player.PostAsync(new RateAudioCommand(value));
+        await FollowupAsync($"Rate set to {value.ToString(CultureInfo.InvariantCulture)}x");
     }
     
     private async Task<AudioSession?> GetAudioSessionAsync()
@@ -423,12 +495,12 @@ internal sealed class AudioCommandsModule(AudioSessionManager sessionManager, Pa
 
         if (sessionManager.TryGetSession(guild.Id, out AudioSession? session))
         {
-            if (Context.Channel.Id == session.TextChannelId)
+            if (Context.Channel.Id == session.PlayerMessage.BoundChannelId)
             {
                 return session;
             }
             
-            string name = guild.Channels[session.TextChannelId].Name;
+            string name = guild.Channels[session.PlayerMessage.BoundChannelId!.Value].Name;
             await RespondAsync(InteractionCallback.Message($"Use commands in #{name}."));
                 
             return null;
@@ -436,12 +508,5 @@ internal sealed class AudioCommandsModule(AudioSessionManager sessionManager, Pa
         
         await RespondAsync(InteractionCallback.Message("Nothing is playing."));
         return null;
-    }
-    
-    private static Task<RestMessage> CreatePlayerMessageAsync(Interaction interaction, Track track, bool isPaused)
-    {
-        return interaction.SendFollowupMessageAsync(new InteractionMessageProperties()
-            .WithEmbeds([EmbedHelper.NowPlaying(track)])
-            .WithComponents([ComponentsHelper.CreatePlayerControlsComponent(isPaused)]));
     }
 }

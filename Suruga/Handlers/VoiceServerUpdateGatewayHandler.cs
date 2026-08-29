@@ -1,6 +1,8 @@
 ﻿using NetCord.Gateway;
 using NetCord.Hosting.Gateway;
 using Suruga.Audio;
+using Suruga.Audio.Commands.Connection;
+using Suruga.Audio.Commands.Voice;
 
 namespace Suruga.Handlers;
 
@@ -26,15 +28,16 @@ internal sealed class VoiceServerUpdateGatewayHandler(AudioSessionManager sessio
 		{
 			return;
 		}
+		
+		await session.Connection.PostAsync(new VoiceServerUpdateEventCommand(arg.Endpoint, arg.Token));
 
-		AudioConnection connection = session.Player.Engine.Connection;
-
+		/*
 		if (arg.Endpoint is null)
 		{
 			connection.Descriptor.Invalidate();
 			return;
 		}
-		
+
 		string? previousEndpoint = connection.Descriptor.Endpoint;
 		connection.Descriptor.UpdateVoiceServer(arg.Endpoint, arg.Token);
 
@@ -45,5 +48,6 @@ internal sealed class VoiceServerUpdateGatewayHandler(AudioSessionManager sessio
 		{
 			await connection.ReconnectAsync();
 		}
+		*/
 	}
 }

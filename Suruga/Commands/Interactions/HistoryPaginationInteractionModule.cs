@@ -17,7 +17,8 @@ internal sealed class HistoryPaginationInteractionModule
 	[ComponentInteraction("history_page_previous")]
 	public async Task ShowPreviousPage()
 	{
-		if (!sessionManager.SessionExists(Context.Guild!.Id) || await GetPaginatorStateAsync() is not PaginatorSession<Track> state)
+		if (!sessionManager.TryGetSession(Context.Guild!.Id, out _) ||
+		    !paginatorManager.TryGet(Context.Guild!.Id, out PaginatorSession<Track>? state))
 		{
 			return;
 		}
@@ -29,18 +30,14 @@ internal sealed class HistoryPaginationInteractionModule
 	[ComponentInteraction("history_page_next")]
 	public async Task ShowNextPage()
 	{
-		if (!sessionManager.SessionExists(Context.Guild!.Id) || await GetPaginatorStateAsync() is not PaginatorSession<Track> state)
+		if (!sessionManager.TryGetSession(Context.Guild!.Id, out _) ||
+		    !paginatorManager.TryGet(Context.Guild!.Id, out PaginatorSession<Track>? state))
 		{
 			return;
 		}
 		
 		state.Paginator.MoveToNextPage();
 		await ModifyPaginatedMessageAsync(state.Paginator);
-	}
-
-	private async Task<PaginatorSession<Track>?> GetPaginatorStateAsync()
-	{
-		return paginatorManager.TryGet(Context.Guild!.Id, out PaginatorSession<Track>? state) ? state : null;
 	}
 
 	private async Task ModifyPaginatedMessageAsync(Paginator<Track> paginator)

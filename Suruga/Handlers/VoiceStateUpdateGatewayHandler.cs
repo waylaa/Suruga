@@ -1,6 +1,9 @@
 ﻿using NetCord.Gateway;
 using NetCord.Hosting.Gateway;
 using Suruga.Audio;
+using Suruga.Audio.Commands.Connection;
+using Suruga.Audio.Commands.Voice;
+using Suruga.Audio.Primitives;
 
 namespace Suruga.Handlers;
 
@@ -24,13 +27,16 @@ internal sealed class VoiceStateUpdateGatewayHandler
     /// </summary>
     /// <param name="arg">The voice state update payload from Discord.</param>
     /// <returns>A completed <see cref="ValueTask"/>.</returns>
-    public ValueTask HandleAsync(VoiceState arg)
+    public async ValueTask HandleAsync(VoiceState arg)
     {
         if (arg.UserId != client.Id || !sessionManager.TryGetSession(arg.GuildId, out AudioSession? session))
         {
-            return ValueTask.CompletedTask;
+            return;
         }
+        
+        await session.Connection.PostAsync(new VoiceStateUpdateEventCommand(arg.GuildId, arg.UserId, arg.ChannelId, arg.SessionId));
 
+        /*
         AudioConnection.AudioConnectionDescriptor descriptor = session.Player.Engine.Connection.Descriptor;
 
         // Disconnected from voice.
@@ -42,5 +48,6 @@ internal sealed class VoiceStateUpdateGatewayHandler
 
         descriptor.UpdateVoiceState(arg.GuildId, arg.UserId, arg.ChannelId, arg.SessionId);
         return ValueTask.CompletedTask;
+        */
     }
 }

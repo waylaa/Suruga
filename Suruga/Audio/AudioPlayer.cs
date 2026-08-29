@@ -1,324 +1,481 @@
-﻿using NetCord;
-using Suruga.Audio.Events;
+﻿using System.Threading.Channels;
+using Microsoft.Extensions.Logging;
+using Suruga.Audio.Commands.Playback;
 using Suruga.Audio.Primitives;
+using Suruga.FFmpeg;
+using Suruga.FFmpeg.Primitives;
 using Suruga.Persistence;
+using Suruga.PostProcessing;
 using Suruga.Primitives;
 using Suruga.Resolvers;
+using Suruga.Resolvers.Sources;
+using Suruga.Transport;
+using Channel = System.Threading.Channels.Channel;
 
 namespace Suruga.Audio;
 
 internal sealed class AudioPlayer : IAsyncDisposable
 {
-	internal event Func<PlayerStateChangedEventArgs, Task>? PlayerStateChanged;
-	
-	internal TrackQueue Queue { get; }
-	
-	internal AudioPlaybackEngine Engine { get; }
+    internal event Func<AudioPlayerState, Track?, Exception?, Task>? PlayerStateChanged;
 
-	internal AudioPlaybackState State { get; private set; } = AudioPlaybackState.Idle;
+    internal TrackQueue Queue { get; }
 
-	private readonly ulong _guildId;
-	private readonly TrackResolverRouter _resolverRouter;
-	private readonly TrackQueueStateRepository _repository;
-	private readonly AsyncMutex _playbackMutex = new();
+    internal AudioPlayerState State { get; private set; } = AudioPlayerState.Idle;
 
-	private bool _isDisposed;
+    private readonly TrackStreamResolverRouter _resolverRouter;
+    private readonly ReadOnlyAudioByteStreamFactory _byteStreamFactory;
+    private readonly TrackQueueStateRepository _repository;
+    private readonly AudioSink _sink;
+    private readonly ILoggerFactory _loggerFactory;
+    private readonly ulong _guildId;
+    
+    private readonly ILogger<AudioPlayer> _logger;
+    private readonly AudioPostProcessor _postProcessor = new();
+    private readonly Lock _lock = new();
+    
+    private readonly Channel<PlaybackCommand> _commands = Channel.CreateUnbounded<PlaybackCommand>();
+    private readonly Task _commandLoopTask;
 
-	internal AudioPlayer
-	(
-		ulong guildId,
-		TrackResolverRouter resolverRouter,
-		AudioPlaybackEngine engine,
-		TrackQueueStateRepository repository
-	)
-	{
-		_guildId = guildId;
-		_resolverRouter = resolverRouter;
-		_repository = repository;
-		
-		Engine = engine;
-		Engine.TrackEnded += OnTrackEndedAsync;
-		
-		TrackQueueState? queueState = Task.Run(() => repository.Load(guildId)).Result;
-		Queue = new TrackQueue(queueState);
-	}
+    private readonly PauseTokenSource _pauseTokenSource = new();
+    private CancellationTokenSource? _playbackCts;
+    private CancellationTokenSource? _trackCts;
+    
+    private Task? _playbackLoopTask;
+    private AudioDecoder? _decoder;
 
-	internal async Task<int> PlayAsync(string input, GuildUser requestedBy, CancellationToken token = default)
-	{
-		ObjectDisposedException.ThrowIf(_isDisposed, this);
+    private bool _isDisposed;
+    
+    internal AudioPlayer
+    (
+        TrackStreamResolverRouter resolverRouter,
+        ReadOnlyAudioByteStreamFactory byteStreamFactory,
+        TrackQueueStateRepository repository,
+        AudioSink sink,
+        ILoggerFactory loggerFactory,
+        ulong guildId
+    )
+    {
+        _resolverRouter = resolverRouter;
+        _byteStreamFactory = byteStreamFactory;
+        _repository = repository;
+        _sink = sink;
+        _loggerFactory = loggerFactory;
+        _logger = _loggerFactory.CreateLogger<AudioPlayer>();
+        _guildId = guildId;
+        
+        Queue = new TrackQueue(_repository, guildId);
+        _commandLoopTask = HandleAsync();
+    }
 
-		TrackRequestContext context = TrackRequestContext.FromUser(requestedBy);
-		Result<TrackSet> resolveResult = await _resolverRouter.ResolveAsync(input, context, token);
+    internal async Task<CommandResult> PostAsync(PlaybackCommand command, CancellationToken token = default)
+    {
+        await _commands.Writer.WriteAsync(command, token);
 
-		if (!resolveResult.TryGetValue(out TrackSet? set) || set.IsEmpty)
-		{
-			return 0;
-		}
+        await using (token.Register(() => command.SetCanceled(token)))
+        {
+            return await command.Task;
+        }
+    }
 
-		using (await _playbackMutex.EnterScopeAsync(token))
-		{
-			Queue.EnqueueRange(set.Tracks);
-			await SaveStateAsync(token);
+    private async Task HandleAsync()
+    {
+        await foreach (PlaybackCommand command in _commands.Reader.ReadAllAsync())
+        {
+            try
+            {
+                CommandResult result = command switch
+                {
+                    PlayAudioCommand play => Play(play),
+                    StopAudioCommand => await StopAsync(),
+                    PauseAudioCommand => await PauseAsync(),
+                    ResumeAudioCommand => await ResumeAsync(),
+                    SkipAudioCommand => await SkipAsync(),
+                    RewindAudioCommand => await RewindAsync(),
+                    ShuffleAudioCommand => Shuffle(),
+                    LoopAudioCommand loop => Loop(loop),
+                    SeekAudioCommand seek => Seek(seek),
+                    ClearAudioCommand => await ClearAsync(),
+                    VolumeAudioCommand volume => SetVolume(volume),
+                    SpeedAudioCommand speed => SetSpeed(speed),
+                    PitchAudioCommand pitch => SetPitch(pitch),
+                    RateAudioCommand rate => SetRate(rate),
+                    _ => new CommandResult(CommandStatus.Undefined)
+                };
+                
+                command.SetResult(result);
+            }
+            catch (Exception ex)
+            {
+                command.SetException(ex);
+            }
+        }
+    }
 
-			if (State is AudioPlaybackState.Playing)
-			{
-				return set.Count;
-			}
+    private CommandResult Play(PlayAudioCommand command)
+    {
+        ObjectDisposedException.ThrowIf(_isDisposed, this);
+        TrackSet trackSet = command.Tracks;
 
-			if (Queue.HasCurrent)
-			{
-				Queue.ArchiveCurrentTrack();
-			}
+        if (trackSet.IsEmpty)
+        {
+            // This should generally not happen here as it is handled by the command module.
+            return new CommandResult(CommandStatus.NoTracks); 
+        }
+        
+        foreach (Track track in trackSet.Tracks)
+        {
+            Queue.Add(track);
+        }
 
-			if (Queue.TryDequeue(out Track? dequeuedTrack))
-			{
-				await StartTrackAsync(dequeuedTrack, token);
-			}
-			else if (Queue.CurrentTrack is Track currentTrack)
-			{
-				await StartTrackAsync(currentTrack, token);
-			}
-		}
+        if (State is not AudioPlayerState.Idle)
+        {
+            return new CommandResult(CommandStatus.Success);
+        }
+        
+        _playbackCts?.Dispose();
+        _trackCts?.Dispose();
 
-		return set.Count;
-	}
+        _playbackCts = new CancellationTokenSource();
+        _playbackLoopTask = PlaybackLoopAsync(_playbackCts.Token);
+        
+        return new CommandResult(CommandStatus.Success);
+    }
 
-	internal async Task StopAsync(CancellationToken token = default)
-	{
-		using (await _playbackMutex.EnterScopeAsync(token))
-		{
-			Queue.Clear();
-			await SaveStateAsync(token);
-			
-			await Engine.StopAsync(token);
-			await TransitionAsync(AudioPlaybackState.Idle);
-		}
-	}
+    private async Task<CommandResult> StopAsync()
+    {
+        ObjectDisposedException.ThrowIf(_isDisposed, this);
 
-	internal Task PauseAsync()
-	{
-		if (State is AudioPlaybackState.Paused)
-		{
-			return Task.CompletedTask;
-		}
-		
-		Engine.Pause();
-		return TransitionAsync(AudioPlaybackState.Paused, Queue.CurrentTrack);
-	}
+        if (State is AudioPlayerState.Idle)
+        {
+            return new CommandResult(CommandStatus.AlreadyStopped);
+        }
 
-	internal Task ResumeAsync()
-	{
-		if (State is AudioPlaybackState.Playing)
-		{
-			return Task.CompletedTask;
-		}
-		
-		Engine.Resume();
-		return TransitionAsync(AudioPlaybackState.Playing, Queue.CurrentTrack);
-	}
+        if (_playbackCts is not null)
+        {
+            await _playbackCts.CancelAsync();
+        }
 
-	internal void Seek(TimeSpan position)
-		=> Engine.Seek(position);
+        if (_playbackLoopTask is not null)
+        {
+            await _playbackLoopTask;
+        }
+        
+        await ChangeStateAsync(AudioPlayerState.Idle);
+        return new CommandResult(CommandStatus.Success);
+    }
 
-	internal async Task SkipAsync(CancellationToken token = default)
-	{
-		ObjectDisposedException.ThrowIf(_isDisposed, this);
+    private async Task<CommandResult> PauseAsync()
+    {
+        ObjectDisposedException.ThrowIf(_isDisposed, this);
 
-		using (await _playbackMutex.EnterScopeAsync(token))
-		{
-			if (!Queue.TrySkip(out Track? nextTrack))
-			{
-				Queue.ArchiveCurrentTrack();
-				await Engine.StopAsync(token);
-				await TransitionAsync(AudioPlaybackState.Idle);
-				
-				return;
-			}
+        if (State is AudioPlayerState.Idle)
+        {
+            return new CommandResult(CommandStatus.NothingToPause);
+        }
 
-			await StartTrackAsync(nextTrack, token);
-			await SaveStateAsync(token);
-		}
-	}
+        if (State is AudioPlayerState.Paused)
+        {
+            return new CommandResult(CommandStatus.AlreadyPaused);
+        }
 
-	internal async Task RewindAsync(CancellationToken token = default)
-	{
-		ObjectDisposedException.ThrowIf(_isDisposed, this);
+        _pauseTokenSource.IsPaused = true;
+        await ChangeStateAsync(AudioPlayerState.Paused, Queue.CurrentTrack);
 
-		using (await _playbackMutex.EnterScopeAsync(token))
-		{
-			if (!Queue.TryMovePrevious(out Track? previousTrack))
-			{
-				await Engine.StopAsync(token);
-				return;
-			}
+        return new CommandResult(CommandStatus.Success);
+    }
 
-			await StartTrackAsync(previousTrack, token);
-			await SaveStateAsync(token);
-		}
-	}
+    private async Task<CommandResult> ResumeAsync()
+    {
+        ObjectDisposedException.ThrowIf(_isDisposed, this);
 
-	internal async Task LoopAsync(LoopMode mode = default, CancellationToken token = default)
-	{
-		ObjectDisposedException.ThrowIf(_isDisposed, this);
+        if (State is AudioPlayerState.Idle)
+        {
+            return new CommandResult(CommandStatus.NothingToResume);
+        }
 
-		using (await _playbackMutex.EnterScopeAsync(token))
-		{
-			// Cycle if no explicit loop mode is provided.
-			if (mode == default)
-			{
-				Queue.CycleLoopMode();
-			}
-			else
-			{
-				Queue.LoopMode = mode;
-			}
-			
-			await SaveStateAsync(token);
-		}
-	}
+        if (State is AudioPlayerState.Playing)
+        {
+            return new CommandResult(CommandStatus.AlreadyPlaying);
+        }
 
-	internal async Task ShuffleAsync(CancellationToken token = default)
-	{
-		ObjectDisposedException.ThrowIf(_isDisposed, this);
+        if (State is AudioPlayerState.Idle && Queue is { HasCurrent: true, HasNext: true })
+        {
+            _playbackCts?.Dispose();
+            _trackCts?.Dispose();
 
-		using (await _playbackMutex.EnterScopeAsync(token))
-		{
-			Queue.Shuffle();
-			await SaveStateAsync(token);
-		}
-	}
+            _playbackCts = new CancellationTokenSource();
+            _playbackLoopTask = PlaybackLoopAsync(_playbackCts.Token);
+        }
+        else
+        {
+            _pauseTokenSource.IsPaused = false;
+        }
 
-	internal async Task ClearAsync(CancellationToken token = default)
-	{
-		ObjectDisposedException.ThrowIf(_isDisposed, this);
+        await ChangeStateAsync(AudioPlayerState.Playing, Queue.CurrentTrack);
+        return new CommandResult(CommandStatus.Success);
+    }
 
-		using (await _playbackMutex.EnterScopeAsync(token))
-		{
-			Queue.Clear();
-            await _repository.RemoveAsync(_guildId, token);
-		}
-	}
-	
-	public async ValueTask DisposeAsync()
-	{
-		if (_isDisposed)
-		{
-			return;
-		}
+    private async Task<CommandResult> SkipAsync()
+    {
+        ObjectDisposedException.ThrowIf(_isDisposed, this);
 
-		_isDisposed = true;
-		Engine.TrackEnded -= OnTrackEndedAsync;
-		
-		try
-		{
-			await Engine.DisposeAsync();
-		}
-		catch
-		{
-			// Ignore exceptions during disposal.
-		}
+        if (State is AudioPlayerState.Idle || !Queue.TryMoveToNext(true))
+        {
+            return new CommandResult(CommandStatus.NothingToSkip);
+        }
+        
+        if (_trackCts is not null)
+        {
+            await _trackCts.CancelAsync();
+        }
 
-		_playbackMutex.Dispose();
-	}
+        return new CommandResult(CommandStatus.Success);
+    }
 
-	/// <summary>
-	/// Starts playback from persisted queue state when the engine is idle.
-	/// </summary>
-	internal async Task<bool> ResumeFromStoredQueueAsync(CancellationToken token = default)
-	{
-		ObjectDisposedException.ThrowIf(_isDisposed, this);
+    private async Task<CommandResult> RewindAsync()
+    {
+        ObjectDisposedException.ThrowIf(_isDisposed, this);
 
-		using (await _playbackMutex.EnterScopeAsync(token))
-		{
-			if (State is AudioPlaybackState.Playing)
-			{
-				return false;
-			}
+        if (State is AudioPlayerState.Idle || !Queue.TryMoveToPrevious())
+        {
+            return new CommandResult(CommandStatus.NothingToRewind);
+        }
 
-			if (Queue.CurrentTrack is Track current)
-			{
-				await StartTrackAsync(current, token);
-				return true;
-			}
-			else if (Queue.TryDequeue(out Track? track))
-			{
-				await StartTrackAsync(track, token);
-				return true;
-			}
+        if (_trackCts is not null)
+        {
+            await _trackCts.CancelAsync();
+        }
+        
+        return new CommandResult(CommandStatus.Success);
+    }
 
-			return false;
-		}
-	}
+    private CommandResult Shuffle()
+    {
+        ObjectDisposedException.ThrowIf(_isDisposed, this);
 
-	private async Task StartTrackAsync(Track track, CancellationToken token = default)
-	{
-		await SaveStateAsync(token);
-		await Engine.PlayAsync(track, token);
-		await TransitionAsync(AudioPlaybackState.Playing, track);
-	}
+        return Queue.TryShuffle()
+            ? new CommandResult(CommandStatus.Success)
+            : new CommandResult(CommandStatus.NotEnoughTracksToShuffle);
+    }
 
-	private async Task OnTrackEndedAsync(Track track)
-	{
-		try
-		{
-			using (await _playbackMutex.EnterScopeAsync())
-			{
-				if (_isDisposed)
-				{
-					return;
-				}
+    private CommandResult Loop(LoopAudioCommand command)
+    {
+        ObjectDisposedException.ThrowIf(_isDisposed, this);
+        
+        if (command.Mode is LoopMode mode)
+        {
+            Queue.LoopMode = mode;
+        }
+        else
+        {
+            Queue.LoopMode = Queue.LoopMode switch
+            {
+                LoopMode.None => LoopMode.Track,
+                LoopMode.Track => LoopMode.Queue,
+                LoopMode.Queue => LoopMode.None,
+                _ => Queue.LoopMode
+            };
+        }
+        
+        return new CommandResult(CommandStatus.Success, LoopModeToString(Queue.LoopMode));
+        
+        static string LoopModeToString(LoopMode mode) => mode switch
+        {
+            LoopMode.None => "none",
+            LoopMode.Track => "per-track",
+            LoopMode.Queue => "per-queue",
+            _ => throw new ArgumentOutOfRangeException(nameof(mode))
+        };
+    }
 
-				if (Queue.TryMoveNext(out Track? nextTrack))
-				{
-					await StartTrackAsync(nextTrack);
-				}
-				else
-				{
-					Queue.ArchiveCurrentTrack();
-					await TransitionAsync(AudioPlaybackState.Idle);
-				}
+    private CommandResult Seek(SeekAudioCommand command)
+    {
+        ObjectDisposedException.ThrowIf(_isDisposed, this);
 
-				await SaveStateAsync();
-			}
-		}
-		catch
-		{
-			// Ignore playback continuation failures.
-		}
-	}
-	
-	private async Task TransitionAsync(AudioPlaybackState state, Track? currentTrack = null)
-	{
-		if (State == state)
-		{
-			return;
-		}
+        using (_lock.EnterScope())
+        {
+            _postProcessor.Reset();
+            
+            return _decoder?.TrySeek(command.Timestamp) == true
+                ? new CommandResult(CommandStatus.Success)
+                : new CommandResult(CommandStatus.UnableToSeek);
+        }
+    }
 
-		State = state;
+    private async Task<CommandResult> ClearAsync()
+    {
+        ObjectDisposedException.ThrowIf(_isDisposed, this);
 
-		if (PlayerStateChanged is not null)
-		{
-			await PlayerStateChanged(new PlayerStateChangedEventArgs(state, currentTrack, false));
-		}
-	}
-	
-	private async Task SaveStateAsync(CancellationToken token = default)
-	{
-		TrackQueueState state = new()
-		{
-			GuildId = _guildId,
-			History = GetNonLocalTracks(Queue.History),
-			Upcoming = GetNonLocalTracks(Queue.Upcoming),
-			CurrentTrack = IsNotLocalTrack(Queue.CurrentTrack) ? Queue.CurrentTrack : null,
-			LoopMode = Queue.LoopMode,
-		};
-		
-		await _repository.SaveAsync(state, token);
-	}
+        if (!Queue.TryClear())
+        {
+            return new CommandResult(CommandStatus.NothingToClear);
+        }
+        
+        await _repository.RemoveAsync(_guildId);
+        return new CommandResult(CommandStatus.Success);
+    }
 
-	private static List<Track> GetNonLocalTracks(IEnumerable<Track> tracks)
-		=> tracks.Where(IsNotLocalTrack).ToList();
+    private CommandResult SetVolume(VolumeAudioCommand command)
+    {
+        ObjectDisposedException.ThrowIf(_isDisposed, this);
 
-	private static bool IsNotLocalTrack(Track? track)
-		=> track?.Platform is not TrackPlatform.Local;
+        _postProcessor.SetGain(command.Value / 100.0);
+        return new CommandResult(CommandStatus.Success);
+    }
+
+    private CommandResult SetSpeed(SpeedAudioCommand command)
+    {
+        ObjectDisposedException.ThrowIf(_isDisposed, this);
+
+        _postProcessor.SetTempo(command.Value);
+        return new CommandResult(CommandStatus.Success);
+    }
+
+    private CommandResult SetPitch(PitchAudioCommand command)
+    {
+        ObjectDisposedException.ThrowIf(_isDisposed, this);
+
+        _postProcessor.SetPitch(command.Value);
+        return new CommandResult(CommandStatus.Success);
+    }
+
+    private CommandResult SetRate(RateAudioCommand command)
+    {
+        ObjectDisposedException.ThrowIf(_isDisposed, this);
+
+        _postProcessor.SetRate(command.Value);
+        return new CommandResult(CommandStatus.Success);
+    }
+
+    private async Task PlaybackLoopAsync(CancellationToken token)
+    {
+        while (Queue.TryGetCurrent(out Track? track) && !token.IsCancellationRequested)
+        {
+            await ChangeStateAsync(AudioPlayerState.Playing, track);
+
+            using (_lock.EnterScope())
+            {
+                _decoder?.Dispose();
+                _decoder = null;
+            }
+            
+            using CancellationTokenSource trackCts = CancellationTokenSource.CreateLinkedTokenSource(token);
+            _trackCts = trackCts;
+            
+            try
+            {
+                StreamSource source = await _resolverRouter.ResolveStreamUriAsync(track, trackCts.Token);
+                await using ReadOnlyAudioByteStream byteStream = _byteStreamFactory.Create(source);
+
+                using (_lock.EnterScope())
+                {
+                    _decoder = new AudioDecoder(byteStream, _loggerFactory.CreateLogger<AudioDecoder>());
+                }
+
+                if (track.StartPosition is TimeSpan startPosition)
+                {
+                    _decoder.TrySeek(startPosition);
+                }
+
+                AudioPipeline pipeline = new(_decoder, _postProcessor);
+
+                foreach (AudioChunk chunk in pipeline.GetAudioChunks(trackCts.Token))
+                {
+                    await _pauseTokenSource.Token
+                        .WaitWhilePausedAsync(() => _sink.FlushAsync(CancellationToken.None))
+                        .WaitAsync(trackCts.Token);
+                    
+                    try
+                    {
+                        await _sink.WriteAsync(chunk.Buffer, trackCts.Token);
+                    }
+                    finally
+                    {
+                        chunk.Dispose();
+                    }
+                }
+
+                await _sink.FlushAsync(trackCts.Token);
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested)
+            {
+                break; // Stop/DisposeAsync called.
+            }
+            catch (OperationCanceledException)
+            {
+                // Skip/Rewind called.
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "{Message}", ex.Message);
+                
+                // The plain idle state call does not get executed because both
+                // states are the same.
+                await ChangeStateAsync(AudioPlayerState.Idle, track, ex);
+            }
+            finally
+            {
+                await Queue.SaveAsync(trackCts.Token);
+                _trackCts = null;
+            }
+
+            if (!Queue.TryMoveToNext())
+            {
+                break;
+            }
+        }
+        
+        await ChangeStateAsync(AudioPlayerState.Idle);
+    }
+
+    private async Task ChangeStateAsync(AudioPlayerState state, Track? currentTrack = null, Exception? error = null)
+    {
+        ObjectDisposedException.ThrowIf(_isDisposed, this);
+        
+        if (State == state)
+        {
+            return;
+        }
+        
+        State = state;
+
+        if (PlayerStateChanged is not null)
+        {
+            await PlayerStateChanged(state, currentTrack, error);
+        }
+    }
+    
+    public async ValueTask DisposeAsync()
+    {
+        if (_isDisposed)
+        {
+            return;
+        }
+
+        _commands.Writer.TryComplete();
+
+        try
+        {
+            if (_playbackCts is not null)
+            {
+                await _playbackCts.CancelAsync();
+            }
+
+            if (_playbackLoopTask is not null)
+            {
+                await _playbackLoopTask;
+            }
+
+            await _commandLoopTask;
+            _decoder?.Dispose();
+        }
+        catch
+        {
+            // Ignore.
+        }
+        
+        // Mark as disposed at the end of disposal to prevent ChangeStateAsync throwing
+        // ObjectDisposedException when the player changes its state during disposal or cancellation.
+        _isDisposed = true; 
+    }
 }

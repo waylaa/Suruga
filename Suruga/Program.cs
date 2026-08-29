@@ -17,6 +17,7 @@ using Polly;
 using Suruga.Audio;
 using Suruga.Commands;
 using Suruga.Commands.Interactions;
+using Suruga.FFmpeg.Logging;
 using Suruga.Handlers;
 using Suruga.Logging;
 using Suruga.Options;
@@ -55,7 +56,7 @@ internal sealed class Program
         ConfigureServices(builder);
 
         IHost host = builder.Build();
-        host.AddComponentInteractionModule<AudioTrackInteractionModule>();
+        host.AddComponentInteractionModule<TrackInteractionModule>();
         host.AddComponentInteractionModule<HistoryPaginationInteractionModule>();
         host.AddComponentInteractionModule<QueuePaginationInteractionModule>();
         host.AddApplicationCommandModule<AudioCommandsModule>();
@@ -125,7 +126,7 @@ internal sealed class Program
         services
             .AddMemoryCache()
             .AddHostedService<FFmpegLoaderService>()
-            .AddActivatedSingleton(sp => FFmpegLogger.Initialize(sp.GetRequiredService<ILogger<FFmpegLogger>>()))
+            .AddActivatedSingleton(sp => FFmpegLogger.Initialize(sp.GetRequiredService<ILogger<FFmpegLogger>>(), IsDevelopmentBuild))
             .AddSingleton<DatabaseClient>()
             .AddSingleton<TrackQueueStateRepository>()
             .AddHttpClient("youtube-bytestream").AddStandardResilienceHandler(CreateHttpResiliencePipeline).Services
@@ -142,7 +143,6 @@ internal sealed class Program
             .AddSingleton<ITrackStreamResolver, YoutubeTrackStreamResolver>()
             .AddSingleton<TrackStreamResolverRouter>()
             .AddSingleton<ReadOnlyAudioByteStreamFactory>()
-            .AddSingleton<AudioPlayerFactory>()
             .AddSingleton<AudioSessionManager>()
             .AddSingleton<PaginatorManager>()
             .AddSingleton<IVoiceLogger, AudioLogger>()

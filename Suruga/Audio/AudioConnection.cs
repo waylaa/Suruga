@@ -1,269 +1,320 @@
-﻿using System.Diagnostics.CodeAnalysis;
+﻿using System.Threading.Channels;
 using NetCord.Gateway;
 using NetCord.Gateway.Voice;
 using NetCord.Logging;
+using Suruga.Audio.Commands;
+using Suruga.Audio.Commands.Connection;
+using Suruga.Audio.Commands.Voice;
 using Suruga.Audio.Primitives;
-using Suruga.Primitives;
 
 namespace Suruga.Audio;
 
-/// <summary>
-/// Represents a managed connection to a Discord voice channel.
-/// </summary>
-internal sealed class AudioConnection : VolatileAsyncDisposable
+internal sealed class AudioConnection : IAsyncDisposable
 {
-	/// <summary>
-	/// Gets the audio sink used to write PCM samples to the voice connection.
-	/// </summary>
-	internal AudioSink Sink { get; } = new();
-	
-	/// <summary>
-	/// Gets the descriptor that tracks the current voice connection state.
-	/// </summary>
-	internal AudioConnectionDescriptor Descriptor { get; } = new();
+    internal event Func<ValueTask>? Disconnected;
+    
+    internal AudioSink Sink { get; }
 
-	private readonly ulong _guildId;
-	private readonly GatewayClient _gatewayClient;
-	private readonly IVoiceLogger _voiceLogger;
+    private readonly GatewayClient _gatewayClient;
+    private readonly IVoiceLogger _voiceLogger;
+    private readonly ulong _guildId;
+    
+    private readonly Channel<VoiceEventCommand> _voiceEvents = Channel.CreateUnbounded<VoiceEventCommand>();
+    private readonly Channel<ConnectionCommand> _commands = Channel.CreateUnbounded<ConnectionCommand>();
+    private readonly Task _voiceEventLoopTask;
+    private readonly Task _commandLoopTask;
+    
+    private TaskCompletionSource _voiceServerTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private TaskCompletionSource _voiceStateTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    
+    private VoiceClient? _voiceClient;
+    private Stream? _voiceStream;
 
-	private readonly VolatileDisposableResource<VoiceClient> _voiceClientResource = new();
-	private readonly VolatileAsyncDisposableResource<Stream> _voiceStreamResource = new();
+    private string? _endpoint;
+    private string _token = string.Empty;
+    private ulong _userId;
+    private ulong? _channelId;
+    private string _sessionId = string.Empty;
 
-	/// <summary>
-	/// Initializes a new audio connection for the specified guild.
-	/// </summary>
-	/// <param name="guildId">The guild identifier.</param>
-	/// <param name="gatewayClient">The Discord gateway client.</param>
-	/// <param name="voiceLogger">Logger used for voice diagnostics.</param>
-	internal AudioConnection(ulong guildId, GatewayClient gatewayClient, IVoiceLogger voiceLogger)
-	{
-		_guildId = guildId;
-		_gatewayClient = gatewayClient;
-		_voiceLogger = voiceLogger;
-	}
+    private bool _isDisposed;
+    
+    public AudioConnection(GatewayClient gatewayClient, IVoiceLogger voiceLogger, ulong guildId)
+    {
+        _gatewayClient = gatewayClient;
+        _voiceLogger = voiceLogger;
+        _guildId = guildId;
+        
+        _voiceEventLoopTask = HandleVoiceEventsAsync();
+        _commandLoopTask = HandleCommandsAsync();
+        
+        Sink = new AudioSink();
+    }
 
-	/// <summary>
-	/// Connects to the specified voice channel, establishing or replacing the active voice session.
-	/// </summary>
-	/// <param name="voiceChannelId">The target voice channel ID.</param>
-	/// <param name="token">A cancellation token.</param>
-	internal async Task ConnectAsync(ulong voiceChannelId, CancellationToken token = default)
-	{
-		ThrowIfDisposed();
+    internal async ValueTask<CommandResult> PostAsync(AudioCommand command, CancellationToken token = default)
+    {
+        switch (command)
+        {
+            case ConnectionCommand connection:
+                await _commands.Writer.WriteAsync(connection, token);
+                break;
+            
+            case VoiceEventCommand voiceEvent:
+                await _voiceEvents.Writer.WriteAsync(voiceEvent, token);
+                break;
+            
+            default: return new CommandResult(CommandStatus.Undefined);
+        }
+        
+        await using (token.Register(() => command.SetCanceled(token)))
+        {
+            return await command.Task;
+        }
+    }
 
-		if (Descriptor.IsValid &&
-		    Descriptor.VoiceChannelId == voiceChannelId &&
-		    _voiceClientResource.Current is not null &&
-		    _voiceStreamResource.Current is not null)
-		{
-			return;
-		}
-		
-		// Connect to the voice channel.
-		await _gatewayClient.UpdateVoiceStateAsync(
-			new VoiceStateProperties(_guildId, voiceChannelId), cancellationToken: token);
+    private async Task HandleVoiceEventsAsync()
+    {
+        await foreach (VoiceEventCommand command in _voiceEvents.Reader.ReadAllAsync())
+        {
+            try
+            {
+                CommandResult result = command switch
+                {
+                    VoiceServerUpdateEventCommand voiceServer => await VoiceServerUpdate(voiceServer),
+                    VoiceStateUpdateEventCommand voiceState => await VoiceStateUpdateAsync(voiceState),
+                    _ => new CommandResult(CommandStatus.Undefined)
+                };
 
-		await Descriptor.WaitUntilReadyAsync(token);
-		await EstablishVoiceSessionAsync(token);
-	}
+                command.SetResult(result);
+            }
+            catch (Exception ex)
+            {
+                command.SetException(ex);
+            }
+        }
+    }
 
-	/// <summary>
-	/// Disconnects from the current voice channel and releases all voice resources.
-	/// </summary>
-	/// <param name="token">A cancellation token.</param>
-	internal async Task DisconnectAsync(CancellationToken token = default)
-	{
-		ThrowIfDisposed();
-		
-		if (!Descriptor.IsValid || _voiceClientResource.Current is null)
-		{
-			return;
-		}
+    private async Task HandleCommandsAsync()
+    {
+        await foreach (ConnectionCommand command in _commands.Reader.ReadAllAsync())
+        {
+            try
+            {
+                CommandResult result = command switch
+                {
+                    ConnectCommand connect => await ConnectAsync(connect),
+                    DisconnectCommand => await DisconnectAsync(),
+                    _ => new CommandResult(CommandStatus.Undefined)
+                };
 
-		await Sink.DetachAsync(token);
-		await _voiceStreamResource.ClearAsync();
-		await TeardownVoiceClientAsync(token);
-		
-		Descriptor.Invalidate();
-		
-		// Disconnect from the voice channel.
-		await _gatewayClient.UpdateVoiceStateAsync(
-			new VoiceStateProperties(_guildId, null), cancellationToken: token);
-	}
+                command.SetResult(result);
+            }
+            catch (Exception ex)
+            {
+                command.SetException(ex);
+            }
+        }
+    }
 
-	/// <summary>
-	/// Reconnects the voice session using the last known connection descriptor.
-	/// </summary>
-	/// <param name="token">A cancellation token.</param>
-	internal async Task ReconnectAsync(CancellationToken token = default)
-	{
-		ThrowIfDisposed();
+    private async Task<CommandResult> ConnectAsync(ConnectCommand command)
+    {
+        if (_voiceClient is not null)
+        {
+            return new CommandResult(CommandStatus.AlreadyConnected);
+        }
 
-		if (!Descriptor.IsValid)
-		{
-			await Descriptor.WaitUntilReadyAsync(token);
-		}
-		
-		await Sink.DetachAsync(token);
-		await TeardownVoiceClientAsync(token);
-		await EstablishVoiceSessionAsync(token);
-	}
+        await _gatewayClient.UpdateVoiceStateAsync(
+            new VoiceStateProperties(_guildId, command.VoiceChannelId));
+        
+        bool result = await WaitForValidVoiceAsync(TimeSpan.FromSeconds(5));
 
-	protected override async ValueTask DisposeCoreAsync()
-	{
-		await Sink.DisposeAsync();
-		await _voiceStreamResource.ClearAsync();
-		await TeardownVoiceClientAsync(CancellationToken.None);
-	}
+        if (!result)
+        {
+            return new CommandResult(CommandStatus.InvalidVoice);
+        }
 
-	private async Task EstablishVoiceSessionAsync(CancellationToken token)
-	{
-		VoiceClient voiceClient = new
-		(
-			Descriptor.UserId!.Value,
-			Descriptor.SessionId!,
-			Descriptor.Endpoint!,
-			Descriptor.GuildId!.Value,
-			Descriptor.VoiceChannelId!.Value,
-			Descriptor.Token!,
-			new VoiceClientConfiguration { Logger = _voiceLogger }
-		);
+        _voiceClient = new VoiceClient
+        (
+            _userId,
+            _sessionId,
+            _endpoint!,
+            _guildId,
+            _channelId!.Value,
+            _token,
+            new VoiceClientConfiguration { Logger = _voiceLogger }
+        );
 
-		_voiceClientResource.Replace(voiceClient);
+        await _voiceClient.StartAsync();
+        await _voiceClient.EnterSpeakingStateAsync(new SpeakingProperties(SpeakingFlags.Microphone));
 
-		await voiceClient.StartAsync(token);
-		await voiceClient.EnterSpeakingStateAsync(new SpeakingProperties(SpeakingFlags.Microphone), cancellationToken: token);
+        _voiceStream = _voiceClient.CreateVoiceStream();
+        await Sink.AttachAsync(_voiceStream);
+        
+        return new CommandResult(CommandStatus.Success);
+    }
 
-		Stream voiceStream = voiceClient.CreateVoiceStream();
-		await _voiceStreamResource.ReplaceAsync(voiceStream);
+    private async Task<CommandResult> DisconnectAsync()
+    {
+        await DisconnectCoreAsync();
+        return new CommandResult(CommandStatus.Success);
+    }
 
-		await Sink.AttachAsync(voiceStream, token);
-	}
+    private async Task<CommandResult> VoiceServerUpdate(VoiceServerUpdateEventCommand eventCommand)
+    {
+        _endpoint = eventCommand.Endpoint;
+        _token = eventCommand.Token;
 
-	private async Task TeardownVoiceClientAsync(CancellationToken token)
-	{
-		VoiceClient? currentVoiceClient = _voiceClientResource.Current;
+        if (_endpoint is null)
+        {
+            _voiceServerTcs.TrySetCanceled();
+            return new CommandResult(CommandStatus.Disconnected);
+        }
+        
+        // Initial connection.
+        if (_voiceClient is null)
+        {
+            _voiceServerTcs.TrySetResult();
+            return new CommandResult(CommandStatus.Success);
+        }
 
-		if (currentVoiceClient is not null)
-		{
-			try
-			{
-				await currentVoiceClient.CloseAsync(cancellationToken: token);
-			}
-			catch
-			{
-				// Ignore.
-			}
-		}
-		
-		_voiceClientResource.Clear();
-	}
+        await ReconnectAsync();
+        _voiceServerTcs.TrySetResult();
+        
+        return new CommandResult(CommandStatus.Success);
 
-	/// <summary>
-	/// Internal state tracker for the underlying voice connection.
-	/// </summary>
-	internal sealed class AudioConnectionDescriptor
-	{
-		/// <summary>
-		/// Gets whether the descriptor contains a fully valid voice connection state.
-		/// </summary>
-		[MemberNotNullWhen(true,
-			nameof(GuildId),
-			nameof(UserId),
-			nameof(VoiceChannelId),
-			nameof(Endpoint),
-			nameof(Token),
-			nameof(SessionId))]
-		internal bool IsValid =>
-			GuildId.HasValue &&
-			UserId.HasValue &&
-			VoiceChannelId.HasValue &&
-			!string.IsNullOrEmpty(Endpoint) &&
-			!string.IsNullOrEmpty(Token) &&
-			!string.IsNullOrEmpty(SessionId);
-		
-		internal ulong? GuildId { get; private set; }
-		
-		internal ulong? UserId { get; private set; }
-		
-		internal ulong? VoiceChannelId { get; private set; }
+        async Task ReconnectAsync()
+        {
+            VoiceClient? oldVoiceClient = _voiceClient;
+            Stream? oldVoiceStream = _voiceStream;
 
-		internal string? Endpoint { get; private set; }
+            _voiceClient = null;
+            _voiceStream = null;
 
-		internal string? Token { get; private set; }
-		
-		internal string? SessionId { get; private set; }
-		
-		private readonly AsyncManualResetEvent _readySignal = new();
-		private readonly Lock _lock = new();
+            if (oldVoiceStream is not null)
+            {
+                await Sink.DetachAsync();
+                await oldVoiceStream.DisposeAsync();
+            }
 
-		internal AudioConnectionDescriptor()
-			=> _readySignal.Reset(); // Set to unsignaled state.
+            if (oldVoiceClient is not null)
+            {
+                if (oldVoiceClient.Status is not WebSocketStatus.Disconnected)
+                {
+                    await oldVoiceClient.CloseAsync();
+                }
+                
+                oldVoiceClient.Dispose();
+            }
+            
+            VoiceClient voiceClient = new
+            (
+                _userId,
+                _sessionId,
+                _endpoint!,
+                _guildId,
+                _channelId!.Value,
+                _token,
+                new VoiceClientConfiguration { Logger = _voiceLogger }
+            );
 
-		/// <summary>
-		/// Waits until the descriptor has received all required voice connection data.
-		/// </summary>
-		/// <param name="token">A cancellation token.</param>
-		internal async Task WaitUntilReadyAsync(CancellationToken token = default)
-		{
-			if (token.CanBeCanceled)
-			{
-				await _readySignal.WaitAsync(token: token);
-				return;
-			}
+            await voiceClient.StartAsync();
+            await voiceClient.EnterSpeakingStateAsync(new SpeakingProperties(SpeakingFlags.Microphone));
 
-			using CancellationTokenSource timeoutCts = new(TimeSpan.FromSeconds(15));
-			await _readySignal.WaitAsync(token: timeoutCts.Token);
-		}
-		
-		internal void UpdateVoiceServer(string? endpoint, string? token)
-		{
-			using (_lock.EnterScope())
-			{
-				Endpoint = endpoint;
-				Token = token;
+            Stream voiceStream = voiceClient.CreateVoiceStream();
+            await Sink.AttachAsync(voiceStream);
 
-				TrySetReady();
-			}
-		}
-		
-		internal void UpdateVoiceState(ulong? guildId, ulong? userId, ulong? voiceChannelId, string? sessionId)
-		{
-			using (_lock.EnterScope())
-			{
-				GuildId = guildId;
-				UserId = userId;
-				VoiceChannelId = voiceChannelId;
-				SessionId = sessionId;
+            _voiceClient = voiceClient;
+            _voiceStream = voiceStream;
+        }
+    }
 
-				TrySetReady();
-			}
-		}
-		
-		/// <summary>
-		/// Invalidates the current connection state and resets readiness.
-		/// </summary>
-		internal void Invalidate()
-		{
-			using (_lock.EnterScope())
-			{
-				_readySignal.Reset();
-				
-				GuildId = null;
-				UserId = null;
-				VoiceChannelId = null;
-				Endpoint = null;
-				Token = null;
-				SessionId = null;
-			}
-		}
+    private async Task<CommandResult> VoiceStateUpdateAsync(VoiceStateUpdateEventCommand eventCommand)
+    {
+        _userId = eventCommand.UserId;
+        _channelId = eventCommand.ChannelId;
+        _sessionId = eventCommand.SessionId;
 
-		private void TrySetReady()
-		{
-			if (IsValid)
-			{
-				_readySignal.Set();
-			}
-		}
-	}
+        if (!_channelId.HasValue)
+        {
+            // Bot disconnected externally.
+            await DisconnectCoreAsync();
+
+            if (Disconnected is not null)
+            {
+                await Disconnected();
+            }
+            
+            _voiceStateTcs.TrySetCanceled();
+            return new CommandResult(CommandStatus.Disconnected);
+        }
+        
+        _voiceStateTcs.TrySetResult();
+        return new CommandResult(CommandStatus.Success);
+    }
+
+    private async Task<bool> WaitForValidVoiceAsync(TimeSpan timeout)
+    {
+        Task waitTask = Task.WhenAll(_voiceServerTcs.Task, _voiceStateTcs.Task);
+        Task completedTask = await Task.WhenAny(waitTask, Task.Delay(timeout));
+        
+        return completedTask == waitTask &&
+               _voiceServerTcs.Task.IsCompletedSuccessfully &&
+               _voiceStateTcs.Task.IsCompletedSuccessfully;
+    }
+
+    private async Task DisconnectCoreAsync()
+    {
+        await Sink.DetachAsync();
+        
+        if (_voiceStream is not null)
+        {
+            await _voiceStream.DisposeAsync();
+            _voiceStream = null;
+        }
+
+        if (_voiceClient is not null)
+        {
+            await _voiceClient.CloseAsync();
+            _voiceClient.Dispose();
+            _voiceClient = null;
+        }
+        
+        await _gatewayClient.UpdateVoiceStateAsync(
+            new VoiceStateProperties(_guildId, null));
+        
+        _voiceServerTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _voiceStateTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+    }
+    
+    public async ValueTask DisposeAsync()
+    {
+        if (_isDisposed)
+        {
+            return;
+        }
+        
+        _isDisposed = true;
+
+        _voiceEvents.Writer.TryComplete();
+        _commands.Writer.TryComplete();
+
+        try
+        {
+            await _voiceEventLoopTask;
+        }
+        catch
+        {
+            // Ignore.
+        }
+
+        try
+        {
+            await _commandLoopTask;
+        }
+        catch
+        {
+            // Ignore.
+        }
+        
+        await DisconnectCoreAsync();
+    }
 }

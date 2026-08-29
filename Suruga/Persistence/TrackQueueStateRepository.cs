@@ -56,7 +56,7 @@ internal sealed class TrackQueueStateRepository
 	/// <returns>
 	/// The persisted queue state if one exists; otherwise, <see langword="null"/>.
 	/// </returns>
-	internal async Task<TrackQueueState?> Load(ulong guildId, CancellationToken token = default)
+	internal TrackQueueState? Load(ulong guildId, CancellationToken token = default)
 	{
 		if (!_databaseOptions.Enable || !_invidiousCompanionOptions.Enable || !IsReady)
 		{
@@ -68,9 +68,9 @@ internal sealed class TrackQueueStateRepository
 			using CancellationTokenSource timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(token);
 			timeoutCts.CancelAfter(TimeSpan.FromSeconds(2));
 			
-			return await _collection
+			return _collection
 				.Find(x => x.GuildId == guildId)
-				.FirstOrDefaultAsync(timeoutCts.Token);
+				.FirstOrDefault(timeoutCts.Token);
 		}
 		catch (OperationCanceledException)
 		{

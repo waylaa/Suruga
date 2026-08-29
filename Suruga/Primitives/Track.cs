@@ -3,7 +3,7 @@
 /// <summary>
 /// Represents an audio track with its associated metadata and playback information.
 /// </summary>
-public sealed record Track
+public sealed class Track
 {
     /// <summary>
     /// Gets the platform where the track originates from.
@@ -48,7 +48,7 @@ public sealed record Track
     /// <summary>
     /// Gets the context or user who requested the track.
     /// </summary>
-    public TrackRequestContext RequestedBy { get; init; }
+    public TrackRequestContext? RequestedBy { get; init; }
 
     /// <summary>
     /// Returns a string representation of the track.

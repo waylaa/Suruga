@@ -1,60 +1,107 @@
 ﻿using NetCord.Gateway.Voice;
-using Suruga.Audio.Primitives;
-using Suruga.Primitives;
 
 namespace Suruga.Audio;
 
-/// <summary>
-/// Represents an audio sink that writes decoded PCM samples to <see cref="OpusEncodeStream"/>.
-/// </summary>
-internal sealed class AudioSink : VolatileAsyncDisposable
+internal sealed class AudioSink : IAsyncDisposable
 {
-	private readonly VolatileSwappableAsyncDisposableResource<OpusEncodeStream> _opusEncodeStreamResource = new();
+    private readonly SemaphoreSlim _lock = new(1, 1);
+    
+    private TaskCompletionSource _readyTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private OpusEncodeStream? _encodeStream;
 
-	/// <summary>
-	/// Attaches a new voice stream, replacing any existing one.
-	/// </summary>
-	/// <param name="voiceStream">The voice stream to write to.</param>
-	/// <param name="token">A cancellation token.</param>
-	internal Task AttachAsync(Stream voiceStream, CancellationToken token = default)
-	{
-		ThrowIfDisposed();
-		
-		OpusEncodeStream newEncodeStream = new(voiceStream, PcmFormat.Float, VoiceChannels.Stereo, OpusApplication.Audio);
-		return _opusEncodeStreamResource.AttachAsync(newEncodeStream, token);
-	}
+    private bool _isDisposed;
+    
+    internal async Task WriteAsync(ReadOnlyMemory<byte> pcm, CancellationToken token = default)
+    {
+        await _readyTcs.Task.WaitAsync(token);
 
-	/// <summary>
-	/// Detaches the current transport. Future writes will block until new transport is attached.
-	/// </summary>
-	/// <param name="token">A cancellation token.</param>
-	internal Task DetachAsync(CancellationToken token = default)
-	{
-		ThrowIfDisposed();
-		return _opusEncodeStreamResource.DetachAsync(token);
-	}
+        await _lock.WaitAsync(token);
 
-	/// <summary>
-	/// Writes PCM samples to the active <see cref="OpusEncodeStream"/>.
-	/// </summary>
-	/// <param name="pcm">The PCM audio samples to encode and send.</param>
-	/// <param name="token">A cancellation token.</param>
-	internal ValueTask WriteAsync(ReadOnlyMemory<byte> pcm, CancellationToken token = default)
-	{
-		ThrowIfDisposed();
-		return _opusEncodeStreamResource.UseAsync(async (stream, ct) => await stream.WriteAsync(pcm, ct), token);
-	}
+        try
+        {
+            if (_encodeStream is null)
+            {
+                return;
+            }
 
-	/// <summary>
-	/// Flushes any buffered audio in <see cref="OpusEncodeStream"/>.
-	/// </summary>
-	/// <param name="token">A cancellation token.</param>
-	internal Task FlushAsync(CancellationToken token = default)
-	{
-		ThrowIfDisposed();
-		return _opusEncodeStreamResource.Peek() is OpusEncodeStream encodeStream ? encodeStream.FlushAsync(token) : Task.CompletedTask;
-	}
+            await _encodeStream.WriteAsync(pcm, token);
+        }
+        finally
+        {
+            _lock.Release();
+        }
+    }
 
-	protected override ValueTask DisposeCoreAsync()
-		=> _opusEncodeStreamResource.DisposeAsync();
+    internal async Task FlushAsync(CancellationToken token = default)
+    {
+        await _readyTcs.Task.WaitAsync(token);
+        
+        await _lock.WaitAsync(token);
+
+        try
+        {
+            if (_encodeStream is null)
+            {
+                return;
+            }
+
+            await _encodeStream.FlushAsync(token);
+        }
+        finally
+        {
+            _lock.Release();
+        }
+    }
+    
+    internal async Task AttachAsync(Stream voiceStream, CancellationToken token = default)
+    {
+        await _lock.WaitAsync(token);
+
+        try
+        {
+            if (_encodeStream is not null)
+            {
+                return;
+            }
+
+            _encodeStream =
+                new OpusEncodeStream(voiceStream, PcmFormat.Float, VoiceChannels.Stereo, OpusApplication.Audio);
+            _readyTcs.TrySetResult();
+        }
+        finally
+        {
+            _lock.Release();
+        }
+    }
+
+    internal async ValueTask DetachAsync()
+    {
+        await _lock.WaitAsync();
+
+        try
+        {
+            if (_encodeStream is not null)
+            {
+                await _encodeStream.DisposeAsync();
+                _encodeStream = null;
+            }
+
+            _readyTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        }
+        finally
+        {
+            _lock.Release();
+        }
+    }
+    
+    public async ValueTask DisposeAsync()
+    {
+        if (_isDisposed)
+        {
+            return;
+        }
+        
+        _isDisposed = true;
+        await DetachAsync();
+    }
 }

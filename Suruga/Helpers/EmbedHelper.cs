@@ -16,7 +16,7 @@ namespace Suruga.Helpers;
 /// </remarks>
 internal static class EmbedHelper
 {
-	private static readonly ObjectPool<StringBuilder> _stringBuilderPool =
+	private static readonly ObjectPool<StringBuilder> StringBuilderPool =
 		new DefaultObjectPool<StringBuilder>(new StringBuilderPooledObjectPolicy());
 	
 	private static readonly Color SuccessColor = new(215, 0, 64);
@@ -58,7 +58,7 @@ internal static class EmbedHelper
     /// <returns>An embed containing the queue contents.</returns>
     internal static EmbedProperties Queue(Track? currentTrack, GuildUser user, Paginator<Track> paginator)
 	{
-		StringBuilder builder = _stringBuilderPool.Get();
+		StringBuilder builder = StringBuilderPool.Get();
 		
 		if (currentTrack is not null)
 		{
@@ -76,7 +76,7 @@ internal static class EmbedHelper
 		}
 		
 		string description = builder.ToString();
-		_stringBuilderPool.Return(builder);
+		StringBuilderPool.Return(builder);
 
 		return new EmbedProperties()
 			.WithColor(SuccessColor)
@@ -96,7 +96,7 @@ internal static class EmbedHelper
     /// <returns>An embed containing playback history.</returns>
     internal static EmbedProperties History(GuildUser user, Paginator<Track> paginator)
 	{
-		StringBuilder builder = _stringBuilderPool.Get();
+		StringBuilder builder = StringBuilderPool.Get();
 
 		foreach ((int Index, Track Track) value in paginator.GetPage().Index())
 		{
@@ -109,7 +109,7 @@ internal static class EmbedHelper
 		}
 		
 		string description = builder.ToString();
-		_stringBuilderPool.Return(builder);
+		StringBuilderPool.Return(builder);
 		
 		return new EmbedProperties()
 			.WithColor(SuccessColor)
@@ -154,8 +154,8 @@ internal static class EmbedHelper
 					.WithInline()
 			)
 			.WithFooter(new EmbedFooterProperties()
-				.WithIconUrl(track.RequestedBy.AvatarUrl)
-				.WithText(track.RequestedBy.Username));
+				.WithIconUrl(track.RequestedBy?.AvatarUrl)
+				.WithText(track.RequestedBy?.Name));
 	}
 
     /// <summary>
@@ -165,7 +165,6 @@ internal static class EmbedHelper
     /// <returns>A string representation of the user's avatar URL.</returns>
     private static string GetUserAvatarUrl(GuildUser user)
 		=> user.GetGuildAvatarUrl()?.ToString() ?? user.GetAvatarUrl()?.ToString() ?? user.DefaultAvatarUrl.ToString();
-
 
     /// <summary>
     /// Gets the display name for a guild user.

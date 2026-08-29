@@ -1,4 +1,5 @@
 ﻿using Suruga.Primitives;
+using Suruga.Resolvers.Primitives;
 
 namespace Suruga.Resolvers;
 

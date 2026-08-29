@@ -1,7 +1,7 @@
 ﻿namespace Suruga.Primitives;
 
 /// <summary>
-/// Represents an read-only collection of <see cref="Track"/> instances.
+/// Represents a read-only collection of <see cref="Track"/> instances.
 /// </summary>
 /// <param name="tracks">The tracks contained in the set.</param>
 public sealed class TrackSet(IReadOnlyList<Track> tracks)
