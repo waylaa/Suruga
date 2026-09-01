@@ -18,6 +18,7 @@ internal enum CommandStatus
     NothingToResume,
     NothingToSkip,
     NothingToRewind,
+    NothingToSeek,
     NothingToClear,
     NotEnoughTracksToShuffle,
     UnableToSeek,

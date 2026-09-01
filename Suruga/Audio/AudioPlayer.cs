@@ -294,6 +294,11 @@ internal sealed class AudioPlayer : IAsyncDisposable
 
         using (_lock.EnterScope())
         {
+            if (State is AudioPlayerState.Idle)
+            {
+                return new CommandResult(CommandStatus.NothingToSeek);
+            }
+            
             _postProcessor.Reset();
             
             return _decoder?.TrySeek(command.Timestamp) == true

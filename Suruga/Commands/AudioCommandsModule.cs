@@ -240,16 +240,15 @@ internal sealed class AudioCommandsModule
         }
         
         await RespondAsync(InteractionCallback.DeferredMessage());
-        AudioPlayer player = session.Player;
-        
-        if (player.State is AudioPlayerState.Playing or AudioPlayerState.Paused)
+        CommandResult result = await session.Player.PostAsync(new SkipAudioCommand());
+
+        if (result.Status is CommandStatus.NothingToSkip)
         {
-            await session.Player.PostAsync(new SkipAudioCommand());
-            await FollowupAsync("Skipped current track.");
+            await FollowupAsync("There is nothing to skip.");
         }
         else
         {
-            await FollowupAsync("There is nothing to skip.");
+            await FollowupAsync("Skipped current track.");
         }
     }
 
@@ -262,16 +261,15 @@ internal sealed class AudioCommandsModule
         }
 
         await RespondAsync(InteractionCallback.DeferredMessage());
-        AudioPlayer player = session.Player;
+        CommandResult result = await session.Player.PostAsync(new RewindAudioCommand());
 
-        if (player.State is AudioPlayerState.Playing or AudioPlayerState.Paused && player.Queue.HasPrevious)
+        if (result.Status is CommandStatus.NothingToRewind)
         {
-            await session.Player.PostAsync(new RewindAudioCommand());
-            await FollowupAsync("Rewound to previous track.");
+            await FollowupAsync("There is no previous track to rewind to.");
         }
         else
         {
-            await FollowupAsync("There is no previous track to rewind to.");
+            await FollowupAsync("Rewound to previous track.");
         }
     }
 
@@ -290,15 +288,21 @@ internal sealed class AudioCommandsModule
         }
         
         await RespondAsync(InteractionCallback.DeferredMessage());
+        CommandResult result = await session.Player.PostAsync(new SeekAudioCommand(time));
 
-        if (session.Player.State is not AudioPlayerState.Idle)
+        switch (result.Status)
         {
-            await session.Player.PostAsync(new SeekAudioCommand(time));
-            await FollowupAsync($"Seeking to {timestamp}");
-        }
-        else
-        {
-            await FollowupAsync("No track is currently playing to seek.");
+            case CommandStatus.Success:
+                await FollowupAsync($"Seeking to {timestamp}");
+                break;
+            
+            case CommandStatus.NothingToSeek:
+                await FollowupAsync("No track is currently playing to seek.");
+                break;
+            
+            case CommandStatus.UnableToSeek:
+                await FollowupAsync($"Unable to seek to {timestamp}");
+                break;
         }
     }
 
@@ -335,7 +339,8 @@ internal sealed class AudioCommandsModule
         
         RestMessage message = await GetResponseAsync();
         
-        paginatorManager.Add(Context.Guild!.Id, message, paginatorSession, async msg => await msg
+        paginatorManager
+            .Add(Context.Guild!.Id, message, paginatorSession, async msg => await msg
             .ModifyAsync(options => options.WithComponents([])));
     }
     
@@ -357,7 +362,8 @@ internal sealed class AudioCommandsModule
         
         RestMessage message = await GetResponseAsync();
         
-        paginatorManager.Add(Context.Guild!.Id, message, paginatorSession, async msg => await msg
+        paginatorManager
+            .Add(Context.Guild!.Id, message, paginatorSession, async msg => await msg
             .ModifyAsync(options => options.WithComponents([])));
     }
 
@@ -375,10 +381,11 @@ internal sealed class AudioCommandsModule
         if (result.Status is CommandStatus.NotEnoughTracksToShuffle)
         {
             await FollowupAsync("There is nothing to shuffle.");
-            return;
         }
-        
-        await FollowupAsync("Shuffled the queue.");
+        else
+        {
+            await FollowupAsync("Shuffled the queue.");
+        }
     }
 
     [SlashCommand("clear", "Clears the queue.", Contexts = [InteractionContextType.Guild])]
@@ -390,9 +397,16 @@ internal sealed class AudioCommandsModule
         }
         
         await RespondAsync(InteractionCallback.DeferredMessage());
-        
-        await session.Player.PostAsync(new ClearAudioCommand());
-        await FollowupAsync("Queue cleared.");
+        CommandResult result = await session.Player.PostAsync(new ClearAudioCommand());
+
+        if (result.Status is CommandStatus.NothingToClear)
+        {
+            await FollowupAsync("There is nothing to clear.");
+        }
+        else
+        {
+            await FollowupAsync("Queue cleared.");
+        }
     }
 
     [SlashCommand("nowplaying", "Gets the currently playing track.", Contexts = [InteractionContextType.Guild])]
