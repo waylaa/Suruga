@@ -5,8 +5,6 @@ namespace Suruga.PostProcessing;
 
 internal sealed class Resampler : IDisposable
 {
-    internal int PendingFrames => _pendingFrames;
-    
     internal double Ratio
     {
         get;
