@@ -62,11 +62,15 @@ public sealed unsafe class ResamplerContext : FFmpegResource<SwrContext>
             catch
             {
                 chunk.Dispose();
+                throw;
             }
         }
 
         return chunk;
     }
+
+    public void Reset()
+        => NativeMethods.swr_init(ref GetReference()).ThrowIfError();
 
     protected override void Release(ref SwrContext* addressOfPointer)
     {

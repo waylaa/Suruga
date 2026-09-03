@@ -85,7 +85,7 @@ internal sealed class AudioPlayer : IAsyncDisposable
             {
                 CommandResult result = command switch
                 {
-                    PlayAudioCommand play => Play(play),
+                    PlayAudioCommand play => await PlayAsync(play),
                     StopAudioCommand => await StopAsync(),
                     PauseAudioCommand => await PauseAsync(),
                     ResumeAudioCommand => await ResumeAsync(),
@@ -111,7 +111,7 @@ internal sealed class AudioPlayer : IAsyncDisposable
         }
     }
 
-    private CommandResult Play(PlayAudioCommand command)
+    private async Task<CommandResult> PlayAsync(PlayAudioCommand command)
     {
         ObjectDisposedException.ThrowIf(_isDisposed, this);
         TrackSet trackSet = command.Tracks;
@@ -131,6 +131,13 @@ internal sealed class AudioPlayer : IAsyncDisposable
         {
             return new CommandResult(CommandStatus.Success);
         }
+
+        if (_playbackLoopTask is not null)
+        {
+            await _playbackLoopTask;
+        }
+
+        ObjectDisposedException.ThrowIf(_isDisposed, this);
         
         _playbackCts?.Dispose();
         _trackCts?.Dispose();
@@ -198,19 +205,7 @@ internal sealed class AudioPlayer : IAsyncDisposable
             return new CommandResult(CommandStatus.AlreadyPlaying);
         }
 
-        if (State is AudioPlayerState.Idle && Queue is { HasCurrent: true, HasNext: true })
-        {
-            _playbackCts?.Dispose();
-            _trackCts?.Dispose();
-
-            _playbackCts = new CancellationTokenSource();
-            _playbackLoopTask = PlaybackLoopAsync(_playbackCts.Token);
-        }
-        else
-        {
-            _pauseTokenSource.IsPaused = false;
-        }
-
+        _pauseTokenSource.IsPaused = false;
         await ChangeStateAsync(AudioPlayerState.Playing, Queue.CurrentTrack);
         return new CommandResult(CommandStatus.Success);
     }
@@ -408,7 +403,8 @@ internal sealed class AudioPlayer : IAsyncDisposable
             }
             catch (OperationCanceledException)
             {
-                // Skip/Rewind called.
+                // Skip/Rewind already moved the queue; do not advance again.
+                continue;
             }
             catch (Exception ex)
             {
@@ -420,7 +416,7 @@ internal sealed class AudioPlayer : IAsyncDisposable
             }
             finally
             {
-                await Queue.SaveAsync(trackCts.Token);
+                await Queue.SaveAsync(CancellationToken.None);
                 _trackCts = null;
             }
 
@@ -435,9 +431,7 @@ internal sealed class AudioPlayer : IAsyncDisposable
 
     private async Task ChangeStateAsync(AudioPlayerState state, Track? currentTrack = null, Exception? error = null)
     {
-        ObjectDisposedException.ThrowIf(_isDisposed, this);
-        
-        if (State == state)
+        if (_isDisposed || State == state)
         {
             return;
         }
@@ -457,6 +451,7 @@ internal sealed class AudioPlayer : IAsyncDisposable
             return;
         }
 
+        _isDisposed = true;
         _commands.Writer.TryComplete();
 
         try
@@ -472,15 +467,16 @@ internal sealed class AudioPlayer : IAsyncDisposable
             }
 
             await _commandLoopTask;
-            _decoder?.Dispose();
+
+            using (_lock.EnterScope())
+            {
+                _decoder?.Dispose();
+                _decoder = null;
+            }
         }
         catch
         {
             // Ignore.
         }
-        
-        // Mark as disposed at the end of disposal to prevent ChangeStateAsync throwing
-        // ObjectDisposedException when the player changes its state during disposal or cancellation.
-        _isDisposed = true; 
     }
 }

@@ -24,6 +24,8 @@ internal sealed class AudioConnection : IAsyncDisposable
     private readonly Task _voiceEventLoopTask;
     private readonly Task _commandLoopTask;
     
+    private readonly SemaphoreSlim _gate = new(1, 1);
+    
     private TaskCompletionSource _voiceServerTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private TaskCompletionSource _voiceStateTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
     
@@ -117,6 +119,11 @@ internal sealed class AudioConnection : IAsyncDisposable
 
     private async Task<CommandResult> ConnectAsync(ConnectCommand command)
     {
+        if (_isDisposed)
+        {
+            return new CommandResult(CommandStatus.Undefined);
+        }
+
         if (_voiceClient is not null)
         {
             return new CommandResult(CommandStatus.AlreadyConnected);
@@ -132,24 +139,43 @@ internal sealed class AudioConnection : IAsyncDisposable
             return new CommandResult(CommandStatus.InvalidVoice);
         }
 
-        _voiceClient = new VoiceClient
-        (
-            _userId,
-            _sessionId,
-            _endpoint!,
-            _guildId,
-            _channelId!.Value,
-            _token,
-            new VoiceClientConfiguration { Logger = _voiceLogger }
-        );
+        await _gate.WaitAsync();
 
-        await _voiceClient.StartAsync();
-        await _voiceClient.EnterSpeakingStateAsync(new SpeakingProperties(SpeakingFlags.Microphone));
+        try
+        {
+            if (_isDisposed)
+            {
+                return new CommandResult(CommandStatus.Undefined);
+            }
 
-        _voiceStream = _voiceClient.CreateVoiceStream();
-        await Sink.AttachAsync(_voiceStream);
-        
-        return new CommandResult(CommandStatus.Success);
+            if (_voiceClient is not null)
+            {
+                return new CommandResult(CommandStatus.AlreadyConnected);
+            }
+
+            _voiceClient = new VoiceClient
+            (
+                _userId,
+                _sessionId,
+                _endpoint!,
+                _guildId,
+                _channelId!.Value,
+                _token,
+                new VoiceClientConfiguration { Logger = _voiceLogger }
+            );
+
+            await _voiceClient.StartAsync();
+            await _voiceClient.EnterSpeakingStateAsync(new SpeakingProperties(SpeakingFlags.Microphone));
+
+            _voiceStream = _voiceClient.CreateVoiceStream();
+            await Sink.AttachAsync(_voiceStream);
+
+            return new CommandResult(CommandStatus.Success);
+        }
+        finally
+        {
+            _gate.Release();
+        }
     }
 
     private async Task<CommandResult> DisconnectAsync()
@@ -183,47 +209,56 @@ internal sealed class AudioConnection : IAsyncDisposable
 
         async Task ReconnectAsync()
         {
-            VoiceClient? oldVoiceClient = _voiceClient;
-            Stream? oldVoiceStream = _voiceStream;
+            await _gate.WaitAsync();
 
-            _voiceClient = null;
-            _voiceStream = null;
-
-            if (oldVoiceStream is not null)
+            try
             {
-                await Sink.DetachAsync();
-                await oldVoiceStream.DisposeAsync();
-            }
+                VoiceClient? oldVoiceClient = _voiceClient;
+                Stream? oldVoiceStream = _voiceStream;
 
-            if (oldVoiceClient is not null)
-            {
-                if (oldVoiceClient.Status is not WebSocketStatus.Disconnected)
+                _voiceClient = null;
+                _voiceStream = null;
+
+                if (oldVoiceStream is not null)
                 {
-                    await oldVoiceClient.CloseAsync();
+                    await Sink.DetachAsync();
+                    await oldVoiceStream.DisposeAsync();
                 }
-                
-                oldVoiceClient.Dispose();
+
+                if (oldVoiceClient is not null)
+                {
+                    if (oldVoiceClient.Status is not WebSocketStatus.Disconnected)
+                    {
+                        await oldVoiceClient.CloseAsync();
+                    }
+
+                    oldVoiceClient.Dispose();
+                }
+
+                VoiceClient voiceClient = new
+                (
+                    _userId,
+                    _sessionId,
+                    _endpoint!,
+                    _guildId,
+                    _channelId!.Value,
+                    _token,
+                    new VoiceClientConfiguration { Logger = _voiceLogger }
+                );
+
+                await voiceClient.StartAsync();
+                await voiceClient.EnterSpeakingStateAsync(new SpeakingProperties(SpeakingFlags.Microphone));
+
+                Stream voiceStream = voiceClient.CreateVoiceStream();
+                await Sink.AttachAsync(voiceStream);
+
+                _voiceClient = voiceClient;
+                _voiceStream = voiceStream;
             }
-            
-            VoiceClient voiceClient = new
-            (
-                _userId,
-                _sessionId,
-                _endpoint!,
-                _guildId,
-                _channelId!.Value,
-                _token,
-                new VoiceClientConfiguration { Logger = _voiceLogger }
-            );
-
-            await voiceClient.StartAsync();
-            await voiceClient.EnterSpeakingStateAsync(new SpeakingProperties(SpeakingFlags.Microphone));
-
-            Stream voiceStream = voiceClient.CreateVoiceStream();
-            await Sink.AttachAsync(voiceStream);
-
-            _voiceClient = voiceClient;
-            _voiceStream = voiceStream;
+            finally
+            {
+                _gate.Release();
+            }
         }
     }
 
@@ -263,26 +298,39 @@ internal sealed class AudioConnection : IAsyncDisposable
 
     private async Task DisconnectCoreAsync()
     {
-        await Sink.DetachAsync();
-        
-        if (_voiceStream is not null)
-        {
-            await _voiceStream.DisposeAsync();
-            _voiceStream = null;
-        }
+        await _gate.WaitAsync();
 
-        if (_voiceClient is not null)
+        try
         {
-            await _voiceClient.CloseAsync();
-            _voiceClient.Dispose();
-            _voiceClient = null;
+            await Sink.DetachAsync();
+
+            if (_voiceStream is not null)
+            {
+                await _voiceStream.DisposeAsync();
+                _voiceStream = null;
+            }
+
+            if (_voiceClient is not null)
+            {
+                if (_voiceClient.Status is not WebSocketStatus.Disconnected)
+                {
+                    await _voiceClient.CloseAsync();
+                }
+
+                _voiceClient.Dispose();
+                _voiceClient = null;
+            }
+
+            await _gatewayClient.UpdateVoiceStateAsync(
+                new VoiceStateProperties(_guildId, null));
+
+            _voiceServerTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            _voiceStateTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         }
-        
-        await _gatewayClient.UpdateVoiceStateAsync(
-            new VoiceStateProperties(_guildId, null));
-        
-        _voiceServerTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        _voiceStateTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        finally
+        {
+            _gate.Release();
+        }
     }
     
     public async ValueTask DisposeAsync()

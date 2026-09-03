@@ -7,7 +7,8 @@ namespace Suruga.FFmpeg;
 public sealed class AudioDecoder : IDisposable
 {
     private readonly ILogger<AudioDecoder> _logger;
-    
+    private readonly Lock _lock = new();
+
     private readonly InputOutputContext _ioContext;
     private readonly FormatContext _formatContext;
     private readonly CodecContext _codecContext;
@@ -15,13 +16,15 @@ public sealed class AudioDecoder : IDisposable
     private readonly Packet _packet;
     private readonly Frame _frame;
 
-    private bool _isFlushed;
+    private bool _packetPending;
+    private bool _endOfInput;
+    private bool _needsFlush;
     private bool _isDisposed;
-    
+
     public AudioDecoder(Stream byteStream, ILogger<AudioDecoder> logger)
     {
         _logger = logger;
-        
+
         _ioContext = new InputOutputContext(byteStream);
         _formatContext = new FormatContext(_ioContext);
         _codecContext = new CodecContext(_formatContext.GetStream());
@@ -29,70 +32,116 @@ public sealed class AudioDecoder : IDisposable
         _packet = new Packet();
         _frame = new Frame();
     }
-    
+
     public bool TryDecodeNextChunk([NotNullWhen(true)] out AudioChunk? chunk, CancellationToken token = default)
     {
-        ObjectDisposedException.ThrowIf(_isDisposed, this);
-        chunk = null;
-        
-        while (!token.IsCancellationRequested)
-        {
-            FFmpegResult receiveResult = _codecContext.ReceiveFrame(_frame);
-
-            if (receiveResult is FFmpegResult.NeedMoreInput)
-            {
-                DecodeNextFrame();
-                continue;
-            }
-
-            if (receiveResult is FFmpegResult.EndOfStream)
-            {
-                return false;
-            }
-
-            if (receiveResult is not FFmpegResult.Success)
-            {
-                throw new InvalidOperationException($"Unknown decoder error ({receiveResult}).");
-            }
-
-            try
-            {
-                chunk = _resamplerContext.Resample(_frame);
-            }
-            finally
-            {
-                _frame.Unreference();
-            }
-
-            return true;
-        }
-        
-        return false;
-    }
-
-    public bool TrySeek(TimeSpan timestamp)
-    {
-        try
+        using (_lock.EnterScope())
         {
             ObjectDisposedException.ThrowIf(_isDisposed, this);
-        
-            _formatContext.Seek(timestamp);
-            _codecContext.Flush();
-            _isFlushed = false;
-            
-            return true;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "{Message}", ex.Message);
+            chunk = null;
+
+            while (!token.IsCancellationRequested)
+            {
+                FFmpegResult receiveResult = _codecContext.ReceiveFrame(_frame);
+
+                if (receiveResult is FFmpegResult.NeedMoreInput)
+                {
+                    if (!TrySendNextPacket())
+                    {
+                        return false;
+                    }
+
+                    continue;
+                }
+
+                if (receiveResult is FFmpegResult.EndOfStream)
+                {
+                    return false;
+                }
+
+                if (receiveResult is not FFmpegResult.Success)
+                {
+                    throw new InvalidOperationException($"Unknown decoder error ({receiveResult}).");
+                }
+
+                try
+                {
+                    chunk = _resamplerContext.Resample(_frame);
+                }
+                finally
+                {
+                    _frame.Unreference();
+                }
+
+                return true;
+            }
+
             return false;
         }
     }
 
-    private void DecodeNextFrame()
+    public bool TrySeek(TimeSpan timestamp)
+    {
+        using (_lock.EnterScope())
+        {
+            try
+            {
+                ObjectDisposedException.ThrowIf(_isDisposed, this);
+
+                _formatContext.Seek(timestamp);
+                _codecContext.Flush();
+                _resamplerContext.Reset();
+
+                if (_packetPending)
+                {
+                    _packet.Unreference();
+                    _packetPending = false;
+                }
+
+                _endOfInput = false;
+                _needsFlush = false;
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "{Message}", ex.Message);
+                return false;
+            }
+        }
+    }
+
+    private bool TrySendNextPacket()
     {
         while (true)
         {
+            if (_packetPending)
+            {
+                FFmpegResult sendResult = _codecContext.SendPacket(_packet);
+
+                if (sendResult is FFmpegResult.NeedMoreInput)
+                {
+                    return true;
+                }
+
+                _packet.Unreference();
+                _packetPending = false;
+                return true;
+            }
+
+            if (_needsFlush)
+            {
+                FFmpegResult sendResult = _codecContext.SendPacket(null);
+
+                if (sendResult is FFmpegResult.NeedMoreInput)
+                {
+                    return true;
+                }
+
+                _needsFlush = false;
+                return true;
+            }
+
             FFmpegResult readResult = _formatContext.ReadFrame(_packet);
 
             if (readResult is FFmpegResult.Discard or FFmpegResult.NeedMoreInput)
@@ -108,15 +157,16 @@ public sealed class AudioDecoder : IDisposable
 
             if (readResult is FFmpegResult.EndOfStream)
             {
-                if (_isFlushed)
+                _packet.Unreference();
+
+                if (_endOfInput)
                 {
-                    return;
+                    return false;
                 }
 
-                _isFlushed = true;
-                _codecContext.SendPacket(null);
-                
-                return;
+                _endOfInput = true;
+                _needsFlush = true;
+                continue;
             }
 
             if (readResult is not FFmpegResult.Success)
@@ -124,33 +174,27 @@ public sealed class AudioDecoder : IDisposable
                 throw new InvalidOperationException($"Unknown demuxer error ({readResult}).");
             }
 
-            try
-            {
-                _codecContext.SendPacket(_packet);
-            }
-            finally
-            {
-                _packet.Unreference();
-            }
-
-            return;
+            _packetPending = true;
         }
     }
-    
+
     public void Dispose()
     {
-        if (_isDisposed)
+        using (_lock.EnterScope())
         {
-            return;
+            if (_isDisposed)
+            {
+                return;
+            }
+
+            _isDisposed = true;
+
+            _frame.Dispose();
+            _packet.Dispose();
+            _resamplerContext.Dispose();
+            _codecContext.Dispose();
+            _formatContext.Dispose();
+            _ioContext.Dispose();
         }
-        
-        _isDisposed = true;
-        
-        _frame.Dispose();
-        _packet.Dispose();
-        _resamplerContext.Dispose();
-        _codecContext.Dispose();
-        _formatContext.Dispose();
-        _ioContext.Dispose();
     }
 }
