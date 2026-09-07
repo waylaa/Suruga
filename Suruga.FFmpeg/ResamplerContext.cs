@@ -37,36 +37,28 @@ public sealed unsafe class ResamplerContext : FFmpegResource<SwrContext>
         NativeMethods.swr_init(ref GetReference()).ThrowIfError();
     }
 
-    public AudioChunk Resample(Frame source)
+    public AudioFrameBuffer Resample(Frame source)
     {
-        long delay = NativeMethods.swr_get_delay(ref GetReference(), _inputSampleRate) + source.SamplesPerChannel;
-        int maxOutputSamples = (int)NativeMethods.av_rescale_rnd(delay, OutputSampleRate, _inputSampleRate, AVRounding.AV_ROUND_UP);
+        long delaySamples = NativeMethods.swr_get_delay(ref GetReference(), _inputSampleRate) + source.SamplesPerChannel;
+        int maxOutputFrames = (int)NativeMethods.av_rescale_rnd(delaySamples, OutputSampleRate, _inputSampleRate, AVRounding.AV_ROUND_UP);
         
-        AudioChunk chunk = new(maxOutputSamples * _outputLayout.nb_channels);
+        AudioFrameBuffer frameBuffer = new(maxOutputFrames, _outputLayout.nb_channels);
         
-        fixed (byte* pChunkBuffer = chunk.Buffer.Span)
+        fixed (byte* pChunkBuffer = frameBuffer.Buffer.Span)
         {
-            try
-            {
-                int samplesWritten = NativeMethods.swr_convert
-                (
-                    ref GetReference(),
-                    in pChunkBuffer,
-                    maxOutputSamples,
-                    in source.ExtendedData,
-                    source.SamplesPerChannel
-                ).ThrowIfError();
+            int samplesWritten = NativeMethods.swr_convert
+            (
+                ref GetReference(),
+                in pChunkBuffer,
+                maxOutputFrames,
+                in source.ExtendedData,
+                source.SamplesPerChannel
+            ).ThrowIfError();
 
-                chunk.Resize(samplesWritten * _outputLayout.nb_channels);
-            }
-            catch
-            {
-                chunk.Dispose();
-                throw;
-            }
+            frameBuffer.Resize(samplesWritten);
         }
 
-        return chunk;
+        return frameBuffer;
     }
 
     public void Reset()

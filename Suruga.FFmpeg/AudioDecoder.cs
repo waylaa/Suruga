@@ -33,7 +33,7 @@ public sealed class AudioDecoder : IDisposable
         _frame = new Frame();
     }
 
-    public bool TryDecodeNextChunk([NotNullWhen(true)] out AudioChunk? chunk, CancellationToken token = default)
+    public bool TryDecodeNextChunk([NotNullWhen(true)] out AudioFrameBuffer? chunk, CancellationToken token = default)
     {
         using (_lock.EnterScope())
         {
