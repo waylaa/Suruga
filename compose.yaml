@@ -1,11 +1,15 @@
-services:
+﻿services:
   suruga:
-    build: .
+    image: suruga
+    build:
+      context: .
+      dockerfile: Suruga/Dockerfile
     container_name: suruga-bot
     restart: unless-stopped
     env_file:
       - .env
     environment:
+      BOT_FFMPEGPATH: /opt/ffmpeg/lib
       DATABASE_CONNECTIONSTRING: mongodb://mongodb:27017
       INVIDIOUSCOMPANION_HOST: invidious-companion
     depends_on:
@@ -15,7 +19,7 @@ services:
         condition: service_started
 
   mongodb:
-    image: mongo:latest
+    image: mongo:7-jammy
     container_name: suruga-mongodb
     restart: unless-stopped
     volumes:

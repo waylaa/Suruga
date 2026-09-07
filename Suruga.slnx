@@ -3,6 +3,10 @@
     <Platform Name="Any CPU" />
     <Platform Name="x64" />
   </Configurations>
+  <Folder Name="/Solution Items/">
+    <File Path=".env" />
+    <File Path="compose.yaml" />
+  </Folder>
   <Project Path="Suruga.FFmpeg/Suruga.FFmpeg.csproj" />
   <Project Path="Suruga.PostProcessing/Suruga.PostProcessing.csproj" />
   <Project Path="Suruga/Suruga.csproj" />
