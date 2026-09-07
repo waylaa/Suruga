@@ -5,6 +5,7 @@
   </Configurations>
   <Folder Name="/Solution Items/">
     <File Path=".env" />
+    <File Path=".env.example" /> 
     <File Path="compose.yaml" />
   </Folder>
   <Project Path="Suruga.FFmpeg/Suruga.FFmpeg.csproj" />
