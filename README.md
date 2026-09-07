@@ -72,13 +72,3 @@ Alternatively, open `Suruga.slnx` in Visual Studio/Rider and build the solution.
 
 ## License
 This project is licensed under the [MIT](https://choosealicense.com/licenses/mit/) License.
-
-### Third-Party Components
-
-This repository redistributes prebuilt FFmpeg binaries for audio decoding under the GNU Lesser General Public License v2.1 (LGPL-2.1).
-
-* FFmpeg Copyright © the FFmpeg developers
-* FFmpeg website: https://ffmpeg.org/
-* FFmpeg source code: https://git.ffmpeg.org/ffmpeg.git
-
-A copy of the LGPL v2.1 license is included at `runtimes/licenses/ffmpeg/COPYING.LGPLv2.1`
