@@ -16,12 +16,22 @@ internal sealed partial class FFmpegLoaderService(IOptions<BotOptions> options, 
 {
     private readonly BotOptions _botOptions = options.Value;
     
-    private const string ExpectedVersion = "8.1";
+    private const string ExpectedVersion = "9.0.1";
     
     public Task StartAsync(CancellationToken cancellationToken)
     {
         try
         {
+            if (string.IsNullOrWhiteSpace(_botOptions.FFmpegPath))
+            {
+                LogMissingFFmpegPath();
+                return Task.FromException(new InvalidOperationException(
+                    "FFmpeg path is not configured. Set the 'BOT_FFMPEGPATH' setting to the " +
+                    "directory containing the FFmpeg shared libraries."));
+            }
+            
+            LogUsingFFmpegPath(_botOptions.FFmpegPath);
+            
             FFmpegLibraryLoader.Initialize(_botOptions.FFmpegPath);
             CheckVersion();
             
@@ -50,10 +60,7 @@ internal sealed partial class FFmpegLoaderService(IOptions<BotOptions> options, 
 
         span = span.TrimStart('n');
         int dash = span.IndexOf('-');
-
-        string version = dash >= 0
-            ? span[..dash].ToString()
-            : span.ToString();
+        string version = dash >= 0 ? span[..dash].ToString() : span.ToString();
                     
         LogVersionMismatch(version, ExpectedVersion);
     }
@@ -63,4 +70,11 @@ internal sealed partial class FFmpegLoaderService(IOptions<BotOptions> options, 
     
     [LoggerMessage(LogLevel.Warning, Message = "FFmpeg version {actual} does not match the expected version {expected}. Compatibility issues may occur.")]
     private partial void LogVersionMismatch(string actual, string expected);
+    
+    [LoggerMessage(LogLevel.Information, Message = "Using FFmpeg libraries from '{path}' as configured by 'BOT_FFMPEGPATH'.")]
+    private partial void LogUsingFFmpegPath(string path);
+    
+    [LoggerMessage(LogLevel.Critical, Message = "'BOT_FFMPEGPATH' is not set. Configure it in your .env file with the directory containing the FFmpeg shared libraries.")]
+    private partial void LogMissingFFmpegPath();
+
 }
