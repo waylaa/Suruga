@@ -30,7 +30,7 @@ internal sealed class AudioPlayer : IAsyncDisposable
     private readonly ulong _guildId;
     
     private readonly ILogger<AudioPlayer> _logger;
-    private readonly AudioPostProcessor _postProcessor = new();
+    private readonly AudioPostProcessor _postProcessor;
     private readonly Lock _lock = new();
     
     private readonly Channel<PlaybackCommand> _commands = Channel.CreateUnbounded<PlaybackCommand>();
@@ -62,6 +62,8 @@ internal sealed class AudioPlayer : IAsyncDisposable
         _loggerFactory = loggerFactory;
         _logger = _loggerFactory.CreateLogger<AudioPlayer>();
         _guildId = guildId;
+
+        _postProcessor = new AudioPostProcessor(_loggerFactory);
         
         Queue = new TrackQueue(_repository, guildId);
         _commandLoopTask = HandleAsync();
@@ -294,7 +296,7 @@ internal sealed class AudioPlayer : IAsyncDisposable
                 return new CommandResult(CommandStatus.NothingToSeek);
             }
             
-            _postProcessor.Reset();
+            // _postProcessor.Reset();
             
             return _decoder?.TrySeek(command.Timestamp) == true
                 ? new CommandResult(CommandStatus.Success)
@@ -319,7 +321,7 @@ internal sealed class AudioPlayer : IAsyncDisposable
     {
         ObjectDisposedException.ThrowIf(_isDisposed, this);
 
-        _postProcessor.SetGain(command.Value / 100.0);
+        _postProcessor.SetGain(command.Value / 100f);
         return new CommandResult(CommandStatus.Success);
     }
 
@@ -379,20 +381,13 @@ internal sealed class AudioPlayer : IAsyncDisposable
 
                 AudioPipeline pipeline = new(_decoder, _postProcessor);
 
-                foreach (AudioChunk chunk in pipeline.GetAudioChunks(trackCts.Token))
+                foreach (AudioFrameBuffer chunk in pipeline.GetAudioChunks(trackCts.Token))
                 {
                     await _pauseTokenSource.Token
                         .WaitWhilePausedAsync(() => _sink.FlushAsync(CancellationToken.None))
                         .WaitAsync(trackCts.Token);
                     
-                    try
-                    {
-                        await _sink.WriteAsync(chunk.Buffer, trackCts.Token);
-                    }
-                    finally
-                    {
-                        chunk.Dispose();
-                    }
+                    await _sink.WriteAsync(chunk.Buffer, trackCts.Token);
                 }
 
                 await _sink.FlushAsync(trackCts.Token);

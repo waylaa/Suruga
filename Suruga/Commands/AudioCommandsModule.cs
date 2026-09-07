@@ -450,7 +450,7 @@ internal sealed class AudioCommandsModule
     }
 
     [SlashCommand("speed", "Set playback speed.", Contexts = [InteractionContextType.Guild])]
-    public async Task SpeedAsync([SlashCommandParameter(MinValue = 0.25, MaxValue = 2)] double value)
+    public async Task SpeedAsync([SlashCommandParameter(MinValue = 0.25, MaxValue = 2)] float value)
     {
         if (await GetAudioSessionAsync() is not AudioSession session)
         {
@@ -464,7 +464,7 @@ internal sealed class AudioCommandsModule
     }
 
     [SlashCommand("pitch", "Set playback pitch.", Contexts = [InteractionContextType.Guild])]
-    public async Task PitchAsync([SlashCommandParameter(MinValue = 0.25, MaxValue = 2)] double value)
+    public async Task PitchAsync([SlashCommandParameter(MinValue = 0.25, MaxValue = 2)] float value)
     {
         if (await GetAudioSessionAsync() is not AudioSession session)
         {
@@ -478,7 +478,7 @@ internal sealed class AudioCommandsModule
     }
 
     [SlashCommand("rate", "Set playback rate.", Contexts = [InteractionContextType.Guild])]
-    public async Task RateAsync([SlashCommandParameter(MinValue = 0.25, MaxValue = 2)] double value)
+    public async Task RateAsync([SlashCommandParameter(MinValue = 0.25, MaxValue = 2)] float value)
     {
         if (await GetAudioSessionAsync() is not AudioSession session)
         {

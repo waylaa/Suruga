@@ -15,26 +15,28 @@ internal sealed class AudioPipeline
         _postProcessor = postProcessor;
     }
     
-    internal IEnumerable<AudioChunk> GetAudioChunks(CancellationToken token = default)
+    internal IEnumerable<AudioFrameBuffer> GetAudioChunks(CancellationToken token = default)
     {
         while (!token.IsCancellationRequested)
         {
-            if (!_decoder.TryDecodeNextChunk(out AudioChunk? decoded, token))
+            if (!_decoder.TryDecodeNextChunk(out AudioFrameBuffer? decoded, token))
             {
                 break;
             }
             
-            if (!_postProcessor.TryPostProcessFrame(decoded, out AudioChunk? postProcessed))
+            if (!_postProcessor.TryPostProcessFrame(decoded, out AudioFrameBuffer? postProcessed))
             {
                 continue;
             }
             
             yield return postProcessed;
         }
-
-        while (!token.IsCancellationRequested && _postProcessor.TryFlush(out AudioChunk? flushed))
+        
+        /*
+        while (!token.IsCancellationRequested && _postProcessor.TryFlush(out AudioFrameBuffer? flushed))
         {
             yield return flushed;
         }
+        */
     }
 }

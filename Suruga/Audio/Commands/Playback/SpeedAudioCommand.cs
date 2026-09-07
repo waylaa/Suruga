@@ -1,3 +1,3 @@
 ﻿namespace Suruga.Audio.Commands.Playback;
 
-internal sealed record SpeedAudioCommand(double Value) : PlaybackCommand;
+internal sealed record SpeedAudioCommand(float Value) : PlaybackCommand;
