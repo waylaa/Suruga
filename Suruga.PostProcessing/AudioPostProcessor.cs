@@ -1,231 +1,121 @@
-﻿using System.Buffers;
-using System.Diagnostics.CodeAnalysis;
+﻿using System.Diagnostics.CodeAnalysis;
+using Microsoft.Extensions.Logging;
 using Suruga.FFmpeg.Primitives;
-using Suruga.PostProcessing.Extensions;
 using Suruga.PostProcessing.Primitives;
+using Suruga.PostProcessing.Processors;
 
 namespace Suruga.PostProcessing;
 
-public sealed class AudioPostProcessor : IDisposable
+public sealed class AudioPostProcessor(ILoggerFactory loggerFactory) : IDisposable
 {
-    private readonly Resampler _resampler = new();
-    private readonly TimeStretch _timeStretch = new();
+    private readonly TimeStretch _timeStretch = new(Channels, loggerFactory);
+    private readonly Resampler _resampler = new(Channels, loggerFactory.CreateLogger<Resampler>());
+    private readonly GainProcessor _gain = new();
+
+    private float _logicalTempo = 1;
+    private float _pitch = 1;
+    private float _logicalRate = 1;
     
-    private float[] _stageA = ArrayPool<float>.Shared.Rent(16384);
-    private float[] _stageB = ArrayPool<float>.Shared.Rent(16384);
+    private const int Channels = 2;
 
-    private double _gain = 1;
-    private double _tempo = 1;
-    private double _pitch = 1;
-    private double _rate = 1;
-
-    private FlushStage _flushStage = FlushStage.Resampler;
-    private bool _isFlushed;
-
-    public void SetGain(double gain)
-        => _gain = gain;
-
-    public void SetTempo(double tempo)
+    public bool TryPostProcessFrame(AudioFrameBuffer input, [NotNullWhen(true)] out AudioFrameBuffer? output)
     {
-        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(tempo, 0);
+        output = null;
 
-        _tempo = tempo;
-        _rate = 1;
-        
-        Reconfigure();
-    }
-
-    public void SetPitch(double pitch)
-    {
-        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(pitch, 0);
-
-        _pitch = pitch;
-        _rate = 1;
-        
-        Reconfigure();
-    }
-
-    public void SetRate(double rate)
-    {
-        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(rate, 0);
-
-        _rate = rate;
-        _tempo = 1;
-        _pitch = 1;
-        
-        Reconfigure();
-    }
-
-    public bool TryPostProcessFrame(AudioChunk input, [NotNullWhen(true)] out AudioChunk? output)
-    {
-        Span<float> samples = input.Samples;
-
-        if (!_gain.IsApproximatelyEqualTo(1))
+        if (input.IsEmpty)
         {
-            GainProcessor.Process(samples, _gain);
+            output = input;
+            return true;
         }
         
-        int frames = samples.Length / 2;
-        EnsureStageCapacity(samples.Length);
+        if (!TryProcessStage(_timeStretch, input, out AudioFrameBuffer? wsolaFrame))
+        {
+            return false;
+        }
         
-        samples.CopyTo(_stageA);
-        int stageFrames = frames;
-
-        if (!(_rate * _pitch).IsApproximatelyEqualTo(1))
+        if (!TryProcessStage(_resampler, wsolaFrame, out AudioFrameBuffer? resamplerFrame))
         {
-            _resampler.Ratio = _rate * _pitch;
-
-            stageFrames = _resampler.Process(_stageA.AsSpan(0, samples.Length), _stageB);
-            (_stageA, _stageB) = (_stageB, _stageA);
+            return false;
         }
 
-        double tempo = _tempo / _pitch;
-
-        if (!tempo.IsApproximatelyEqualTo(1))
+        if (!TryProcessStage(_gain, resamplerFrame, out AudioFrameBuffer? finalFrame))
         {
-            _timeStretch.Tempo = tempo;
-            
-            _timeStretch.Put(_stageA.AsSpan(0, stageFrames * 2));
-            int produced = _timeStretch.Process(_stageB);
-
-            if (produced > 0)
-            {
-                output = new AudioChunk(produced * 2);
-                _stageB.AsSpan(0, produced * 2).CopyTo(output.Samples);
-
-                input.Dispose();
-                return true;
-            }
+            return false;
         }
-        else if (stageFrames > 0)
+
+        output = finalFrame;
+        return true;
+    }
+
+    public void SetTempo(float value)
+    {
+        _logicalTempo = value;
+        ApplyParameters();
+    }
+
+    public void SetPitch(float value)
+    {
+        _pitch = value;
+        ApplyParameters();
+    }
+
+    public void SetRate(float value)
+    {
+        _logicalRate = value;
+        ApplyParameters();
+    }
+
+    public void SetGain(float value)
+        => _gain.Gain = value;
+
+    private void ApplyParameters()
+    {
+        _timeStretch.Tempo = _logicalTempo / _pitch;
+        _resampler.Rate = _pitch * _logicalRate;
+    }
+
+    private static bool TryProcessStage
+    (
+        IAudioProcessor processor,
+        AudioFrameBuffer input,
+        [NotNullWhen(true)] out AudioFrameBuffer? output
+    )
+    {
+        AudioProcessorStatus sendStatus = processor.SendFrame(input);
+
+        if (sendStatus is AudioProcessorStatus.NoOp)
         {
-            output = new AudioChunk(stageFrames * 2);
-            _stageA.AsSpan(0, stageFrames * 2).CopyTo(output.Samples);
-            
-            input.Dispose();
+            output = input;
             return true;
         }
 
-        input.Dispose();
-        output = null;
-        
-        return false;
-    }
-
-    public bool TryFlush([NotNullWhen(true)] out AudioChunk? output)
-    {
-        while (true)
+        if (sendStatus is not AudioProcessorStatus.Success)
         {
-            switch (_flushStage)
-            {
-                case FlushStage.Resampler:
-                {
-                    if (_isFlushed)
-                    {
-                        output = null;
-                        return false;
-                    }
-
-                    int resampledFrames = _resampler.Flush(_stageA);
-
-                    if (resampledFrames > 0)
-                    {
-                        _timeStretch.Put(_stageA.AsSpan(0, resampledFrames * 2));
-                        continue;
-                    }
-                    
-                    EnsureStageCapacity(_timeStretch.AvailableFrames * 2);
-                    _flushStage = FlushStage.TimeStretchHops;
-                    
-                    continue;
-                }
-
-                case FlushStage.TimeStretchHops:
-                {
-                    int produced = _timeStretch.Process(_stageB);
-
-                    if (produced > 0)
-                    {
-                        output = new AudioChunk(produced * 2);
-                        _stageB.AsSpan(0, produced * 2).CopyTo(output.Samples);
-                        
-                        return true;
-                    }
-
-                    _flushStage = FlushStage.TimeStretchTail;
-                    continue;
-                }
-
-                case FlushStage.TimeStretchTail:
-                {
-                    int produced = _timeStretch.Flush(_stageB);
-
-                    if (produced > 0)
-                    {
-                        output = new AudioChunk(produced * 2);
-                        _stageB.AsSpan(0, produced * 2).CopyTo(output.Samples);
-                        
-                        return true;
-                    }
-
-                    _flushStage = FlushStage.Done;
-                    _isFlushed = true;
-                    
-                    continue;
-                }
-
-                case FlushStage.Done:
-                default:
-                {
-                    output = null;
-                    return false;
-                }
-            }
-        }
-    }
-
-    public void Reset()
-    {
-        _resampler.Reset();
-        _timeStretch.Reset();
-        
-        _isFlushed = false;
-    }
-
-    private void Reconfigure()
-    {
-        _timeStretch.WindowScale = 1.0 / (_rate * _pitch); 
-        
-        _resampler.Reset();
-        _timeStretch.Reset();
-
-        _isFlushed = false;
-    }
-
-    private void EnsureStageCapacity(int required)
-    {
-        if (required <= _stageA.Length && required <= _stageB.Length)
-        {
-            return;
+            output = null;
+            return false;
         }
 
-        int size = Math.Max(required, Math.Max(_stageA.Length, _stageB.Length) * 2);
-        float[] a = ArrayPool<float>.Shared.Rent(size);
-        float[] b = ArrayPool<float>.Shared.Rent(size);
+        AudioProcessorStatus receiveStatus = processor.ReceiveFrame(out output!);
 
-        ArrayPool<float>.Shared.Return(_stageA);
-        ArrayPool<float>.Shared.Return(_stageB);
+        if (receiveStatus is AudioProcessorStatus.NoOp)
+        {
+            output = input;
+            return true;
+        }
+        
+        if (receiveStatus is not AudioProcessorStatus.Success)
+        {
+            output = null;
+            return false;
+        }
 
-        _stageA = a;
-        _stageB = b;
+        return true;
     }
 
     public void Dispose()
     {
-        _resampler.Dispose();
         _timeStretch.Dispose();
-
-        ArrayPool<float>.Shared.Return(_stageA);
-        ArrayPool<float>.Shared.Return(_stageB);
+        _resampler.Dispose();
+        _gain.Dispose();
     }
 }
