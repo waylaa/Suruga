@@ -1,4 +1,5 @@
-﻿using System.Runtime.CompilerServices;
+﻿using System.Diagnostics.CodeAnalysis;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
 using Suruga.FFmpeg.Interop;
@@ -10,7 +11,7 @@ public readonly unsafe ref struct DictionaryView(ref readonly AVDictionary point
 {
     private readonly ref readonly AVDictionary _pointer = ref pointer;
     
-    public bool TryGetValue(string key, out string? value)
+    public bool TryGetValue(string key, [NotNullWhen(true)] out string? value)
     {
         if (Unsafe.IsNullRef(in _pointer))
         {
