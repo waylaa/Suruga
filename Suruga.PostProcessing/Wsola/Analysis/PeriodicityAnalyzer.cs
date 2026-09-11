@@ -1,4 +1,5 @@
 ﻿using System.Numerics.Tensors;
+using Suruga.PostProcessing.Wsola.Helpers;
 
 namespace Suruga.PostProcessing.Wsola.Analysis;
 
@@ -27,12 +28,14 @@ internal sealed class PeriodicityAnalyzer
 
         int available = Math.Min(_maximumPeriod, samples.Length / 2);
 
+        ReadOnlySpan<float> prefixEnergy = CorrelationHelper.BuildPrefixSumOfSquares(samples);
+
         int coarseLag = _minimumPeriod;
         float coarseCorrelation = 0;
 
         for (int lag = _minimumPeriod; lag <= available; lag += CoarseStride)
         {
-            float correlation = Correlate(samples, lag);
+            float correlation = Correlate(samples, prefixEnergy, lag);
 
             if (correlation > coarseCorrelation)
             {
@@ -53,7 +56,7 @@ internal sealed class PeriodicityAnalyzer
                 continue;
             }
 
-            float correlation = Correlate(samples, lag);
+            float correlation = Correlate(samples, prefixEnergy, lag);
 
             if (correlation > bestCorrelation)
             {
@@ -64,7 +67,7 @@ internal sealed class PeriodicityAnalyzer
         return Math.Clamp(bestCorrelation, 0, 1);
     }
 
-    private static float Correlate(ReadOnlySpan<float> samples, int lag)
+    private static float Correlate(ReadOnlySpan<float> samples, ReadOnlySpan<float> prefixEnergy, int lag)
     {
         int sampleCount = samples.Length - lag;
 
@@ -72,8 +75,8 @@ internal sealed class PeriodicityAnalyzer
         ReadOnlySpan<float> delayed = samples.Slice(lag, sampleCount);
 
         float xy = TensorPrimitives.Dot(reference, delayed);
-        float xx = TensorPrimitives.SumOfSquares(reference);
-        float yy = TensorPrimitives.SumOfSquares(delayed);
+        float xx = prefixEnergy[sampleCount];
+        float yy = prefixEnergy[samples.Length] - prefixEnergy[lag];
 
         float denominator = MathF.Sqrt(xx * yy);
         return denominator <= 1e-12f ? 0 : xy / denominator;

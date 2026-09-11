@@ -1,4 +1,5 @@
 ﻿using System.Numerics.Tensors;
+using Suruga.PostProcessing.Wsola.Helpers;
 
 namespace Suruga.PostProcessing.Wsola.Matching;
 
@@ -54,6 +55,8 @@ internal static class NccMatcher
 
         int overlapSamples = effectiveOverlap * channels;
 
+        ReadOnlySpan<float> prefixEnergy = CorrelationHelper.BuildPrefixSumOfSquares(input);
+
         int coarsePosition = minimumPosition;
         float coarseCorrelation = float.NegativeInfinity;
 
@@ -63,6 +66,7 @@ internal static class NccMatcher
             (
                 input,
                 reference,
+                prefixEnergy,
                 position * channels,
                 overlapSamples,
                 referenceEnergy
@@ -92,6 +96,7 @@ internal static class NccMatcher
             (
                 input,
                 reference,
+                prefixEnergy,
                 position * channels,
                 overlapSamples,
                 referenceEnergy
@@ -116,6 +121,7 @@ internal static class NccMatcher
     (
         ReadOnlySpan<float> input,
         ReadOnlySpan<float> reference,
+        ReadOnlySpan<float> prefixEnergy,
         int sampleOffset,
         int length,
         float referenceEnergy
@@ -124,7 +130,7 @@ internal static class NccMatcher
         ReadOnlySpan<float> candidate = input.Slice(sampleOffset, length);
 
         float dot = TensorPrimitives.Dot(reference, candidate);
-        float candidateEnergy = TensorPrimitives.SumOfSquares(candidate);
+        float candidateEnergy = prefixEnergy[sampleOffset + length] - prefixEnergy[sampleOffset];
         float denominator = MathF.Sqrt(referenceEnergy * candidateEnergy);
 
         return denominator > 1e-12f ? dot / denominator : 0;

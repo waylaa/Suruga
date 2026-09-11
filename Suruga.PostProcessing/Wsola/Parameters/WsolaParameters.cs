@@ -4,8 +4,6 @@ internal sealed record WsolaParameters(int WindowFrames, int OverlapFrames, int 
 {
     internal int SynthesisHopFrames => WindowFrames - OverlapFrames;
 
-    internal int CorrelationFrames => OverlapFrames;
-
     internal void Validate()
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(WindowFrames);

@@ -90,7 +90,8 @@ public sealed unsafe partial class FFmpegLogger
         {
             return;
         }
-
+        
+        // Do not include pointer addresses in logs.
         if (span.StartsWith((byte)'['))
         {
             int closingBracketIndex = span.IndexOf((byte)']');
