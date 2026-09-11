@@ -7,8 +7,7 @@ namespace Suruga.FFmpeg;
 public sealed class AudioDecoder : IDisposable
 {
     private readonly ILogger<AudioDecoder> _logger;
-    private readonly Lock _lock = new();
-
+    
     private readonly InputOutputContext _ioContext;
     private readonly FormatContext _formatContext;
     private readonly CodecContext _codecContext;
@@ -35,79 +34,73 @@ public sealed class AudioDecoder : IDisposable
 
     public bool TryDecodeNextChunk([NotNullWhen(true)] out AudioFrameBuffer? chunk, CancellationToken token = default)
     {
-        using (_lock.EnterScope())
+        ObjectDisposedException.ThrowIf(_isDisposed, this);
+        chunk = null;
+
+        while (!token.IsCancellationRequested)
         {
-            ObjectDisposedException.ThrowIf(_isDisposed, this);
-            chunk = null;
+            FFmpegResult receiveResult = _codecContext.ReceiveFrame(_frame);
 
-            while (!token.IsCancellationRequested)
+            if (receiveResult is FFmpegResult.NeedMoreInput)
             {
-                FFmpegResult receiveResult = _codecContext.ReceiveFrame(_frame);
-
-                if (receiveResult is FFmpegResult.NeedMoreInput)
-                {
-                    if (!TrySendNextPacket())
-                    {
-                        return false;
-                    }
-
-                    continue;
-                }
-
-                if (receiveResult is FFmpegResult.EndOfStream)
+                if (!TrySendNextPacket())
                 {
                     return false;
                 }
 
-                if (receiveResult is not FFmpegResult.Success)
-                {
-                    throw new InvalidOperationException($"Unknown decoder error ({receiveResult}).");
-                }
-
-                try
-                {
-                    chunk = _resamplerContext.Resample(_frame);
-                }
-                finally
-                {
-                    _frame.Unreference();
-                }
-
-                return true;
+                continue;
             }
 
-            return false;
+            if (receiveResult is FFmpegResult.EndOfStream)
+            {
+                return false;
+            }
+
+            if (receiveResult is not FFmpegResult.Success)
+            {
+                throw new InvalidOperationException($"Unknown decoder error ({receiveResult}).");
+            }
+
+            try
+            {
+                chunk = _resamplerContext.Resample(_frame);
+            }
+            finally
+            {
+                _frame.Unreference();
+            }
+
+            return true;
         }
+
+        return false;
     }
 
     public bool TrySeek(TimeSpan timestamp)
     {
-        using (_lock.EnterScope())
+        try
         {
-            try
+            ObjectDisposedException.ThrowIf(_isDisposed, this);
+
+            _formatContext.Seek(timestamp);
+            _codecContext.Flush();
+            _resamplerContext.Reset();
+
+            if (_packetPending)
             {
-                ObjectDisposedException.ThrowIf(_isDisposed, this);
-
-                _formatContext.Seek(timestamp);
-                _codecContext.Flush();
-                _resamplerContext.Reset();
-
-                if (_packetPending)
-                {
-                    _packet.Unreference();
-                    _packetPending = false;
-                }
-
-                _endOfInput = false;
-                _needsFlush = false;
-
-                return true;
+                _packet.Unreference();
+                _packetPending = false;
             }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "{Message}", ex.Message);
-                return false;
-            }
+
+            _endOfInput = false;
+            _needsFlush = false;
+
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "{Message}", ex.Message);
+            return false;
         }
     }
 
@@ -180,21 +173,18 @@ public sealed class AudioDecoder : IDisposable
 
     public void Dispose()
     {
-        using (_lock.EnterScope())
+        if (_isDisposed)
         {
-            if (_isDisposed)
-            {
-                return;
-            }
-
-            _isDisposed = true;
-
-            _frame.Dispose();
-            _packet.Dispose();
-            _resamplerContext.Dispose();
-            _codecContext.Dispose();
-            _formatContext.Dispose();
-            _ioContext.Dispose();
+            return;
         }
+
+        _isDisposed = true;
+
+        _frame.Dispose();
+        _packet.Dispose();
+        _resamplerContext.Dispose();
+        _codecContext.Dispose();
+        _formatContext.Dispose();
+        _ioContext.Dispose();
     }
 }
