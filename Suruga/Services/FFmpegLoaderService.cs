@@ -22,14 +22,6 @@ internal sealed partial class FFmpegLoaderService(IOptions<BotOptions> options, 
     {
         try
         {
-            if (string.IsNullOrWhiteSpace(_botOptions.FFmpegPath))
-            {
-                LogMissingFFmpegPath();
-                return Task.FromException(new InvalidOperationException(
-                    "FFmpeg path is not configured. Set the 'BOT_FFMPEGPATH' setting to the " +
-                    "directory containing the FFmpeg shared libraries."));
-            }
-            
             LogUsingFFmpegPath(_botOptions.FFmpegPath);
             
             FFmpegLibraryLoader.Initialize(_botOptions.FFmpegPath);
@@ -73,8 +65,4 @@ internal sealed partial class FFmpegLoaderService(IOptions<BotOptions> options, 
     
     [LoggerMessage(LogLevel.Information, Message = "Using FFmpeg libraries from '{path}' as configured by 'BOT_FFMPEGPATH'.")]
     private partial void LogUsingFFmpegPath(string path);
-    
-    [LoggerMessage(LogLevel.Critical, Message = "'BOT_FFMPEGPATH' is not set. Configure it in your .env file with the directory containing the FFmpeg shared libraries.")]
-    private partial void LogMissingFFmpegPath();
-
 }
