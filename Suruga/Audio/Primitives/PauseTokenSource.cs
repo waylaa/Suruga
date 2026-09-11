@@ -39,11 +39,16 @@ internal sealed class PauseTokenSource
         }
     }
 
-    internal readonly struct PauseToken(PauseTokenSource? source)
+    internal readonly struct PauseToken
     {
-        private bool IsPaused => source?.IsPaused ?? false;
+        private bool IsPaused => _source?.IsPaused ?? false;
+
+        private readonly PauseTokenSource? _source;
+        
+        internal PauseToken(PauseTokenSource? source)
+            => _source = source;
         
         internal Task WaitWhilePausedAsync(Func<Task>? beforeWait = null)
-            => IsPaused ? source!.WaitWhilePausedAsync(beforeWait) : Task.CompletedTask;
+            => IsPaused && _source is not null ? _source.WaitWhilePausedAsync(beforeWait) : Task.CompletedTask;
     }
 }
