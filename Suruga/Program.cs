@@ -1,5 +1,4 @@
 ﻿using System.Net;
-using System.Runtime;
 using System.Runtime.InteropServices;
 using DotNetEnv.Configuration;
 using Microsoft.Extensions.Configuration;
@@ -35,23 +34,24 @@ namespace Suruga;
 
 internal sealed class Program
 {
-    internal static bool IsDevelopmentBuild { get; private set; }
+    internal static bool IsDevelopmentBuild
+    {
+        get
+        {
+#if DEBUG
+            return true;
+#else
+            return false;
+#endif
+        }
+    }
 
     private static async Task Main()
     {
-        GCSettings.LatencyMode = GCLatencyMode.SustainedLowLatency;
         Console.Title = "Suruga";
-        
-        if (RuntimeInformation.RuntimeIdentifier is not ("win-x64" or "linux-x64" or "linux-arm64"))
-        {
-            await Console.Error.WriteLineAsync($"Unsupported platform: {RuntimeInformation.RuntimeIdentifier}");
-            Environment.Exit(1);
-        }
-
         HostApplicationBuilder builder = Host.CreateApplicationBuilder();
-        IsDevelopmentBuild = builder.Environment.IsDevelopment();
 
-        builder.Configuration.AddDotNetEnv();
+        ConfigureAppConfiguration(builder);
         ConfigureLogging(builder);
         ConfigureServices(builder);
 
@@ -63,6 +63,9 @@ internal sealed class Program
         
         await host.RunAsync();
     }
+
+    private static void ConfigureAppConfiguration(HostApplicationBuilder builder)
+        => builder.Configuration.AddDotNetEnv();
 
     private static void ConfigureLogging(HostApplicationBuilder builder)
     {
@@ -76,6 +79,7 @@ internal sealed class Program
         builder.Logging.AddFilter((category, level) => category switch
         {
             not null when category.StartsWith("Microsoft.Extensions.Hosting.Internal.Host") => false,
+            not null when category.StartsWith("Microsoft.Hosting.Lifetime") => false,
             not null when category.StartsWith("System.Net.Http.HttpClient") && level < LogLevel.Warning => false,
             not null when category.StartsWith("Microsoft.Extensions.Http") && level < LogLevel.Warning => false,
             not null when category.StartsWith("Polly") && level < LogLevel.Warning => false,
@@ -83,51 +87,50 @@ internal sealed class Program
             _ => true
         });
     }
-
+    
     private static void ConfigureServices(HostApplicationBuilder builder)
     {
         IServiceCollection services = builder.Services;
         ConfigurationManager config = builder.Configuration;
 
-        services.Configure<BotOptions>(options =>
-        {
-            options.Token = config["BOT_TOKEN"]
-                ?? throw new InvalidOperationException("Token is missing or invalid.");
+        services
+            .AddOptions<BotOptions>()
+            .Configure(options =>
+            {
+                options.Token = config.GetValue<string>("BOT_TOKEN") ?? string.Empty;
+                options.DevelopmentGuildId = config.GetValue<ulong?>("BOT_DEVELOPMENTGUILDID");
+                options.FFmpegPath = IsDevelopmentBuild
+                    ? Path.Combine(AppContext.BaseDirectory, "runtimes", RuntimeInformation.RuntimeIdentifier, "native") 
+                    : config.GetValue<string>("BOT_FFMPEGPATH") ?? AppContext.BaseDirectory;
+            })
+            .Validate(options => !string.IsNullOrWhiteSpace(options.Token), "Bot token cannot be empty.");
 
-            options.DevelopmentGuildId = config.GetValue<ulong?>("BOT_DEVELOPMENTGUILDID");
-            options.FFmpegPath = config["BOT_FFMPEGPATH"];
-        });
-
-        services.Configure<DatabaseOptions>(options =>
+        services.AddOptions<DatabaseOptions>().Configure(options =>
         {
             options.Enable = config.GetValue<bool>("DATABASE_ENABLE");
-
-            options.ConnectionString = config["DATABASE_CONNECTIONSTRING"]
-                ?? throw new InvalidOperationException("Database connection string is missing or invalid.");
-
-            options.Name = config["DATABASE_NAME"]
-                ?? throw new InvalidOperationException("Database name is missing or invalid.");
+            options.Path = config.GetValue<string>("DATABASE_PATH");
         });
 
-        services.Configure<InvidiousCompanionOptions>(options =>
-        {
-            options.Enable = config.GetValue<bool>("INVIDIOUSCOMPANION_ENABLE");
-
-            options.SecretKey = config["INVIDIOUSCOMPANION_SECRETKEY"]
-                ?? throw new InvalidOperationException("Secret key is missing or invalid.");
-
-            options.Host = config["INVIDIOUSCOMPANION_HOST"]
-                ?? throw new InvalidOperationException("Host is missing or invalid.");
-
-            options.Port = config.GetValue<ushort>("INVIDIOUSCOMPANION_PORT");
-            options.UseHttps = config.GetValue<bool>("INVIDIOUSCOMPANION_USEHTTPS");
-        });
+        services
+            .AddOptions<InvidiousCompanionOptions>()
+            .Configure(options =>
+            {
+                options.Enable = config.GetValue<bool>("INVIDIOUSCOMPANION_ENABLE");
+                options.SecretKey = config.GetValue<string>("INVIDIOUSCOMPANION_SECRETKEY") ?? string.Empty;
+                options.Host = config.GetValue<string>("INVIDIOUSCOMPANION_HOST") ?? string.Empty;
+                options.Port = config.GetValue<ushort>("INVIDIOUSCOMPANION_PORT");
+                options.UseHttps = config.GetValue<bool>("INVIDIOUSCOMPANION_USEHTTPS");
+            })
+            .Validate(options => !string.IsNullOrWhiteSpace(options.SecretKey), "Invidious Companion secret key cannot be empty.")
+            .Validate(options => !string.IsNullOrWhiteSpace(options.Host), "Invidious Companion host cannot be empty.")
+            .Validate(options => options.Port is >= 1 and <= 65535, "Invidious Companion port is out of range (Must be between 1-65535).");
 
         services
             .AddMemoryCache()
             .AddHostedService<FFmpegLoaderService>()
             .AddActivatedSingleton(sp => FFmpegLogger.Initialize(sp.GetRequiredService<ILogger<FFmpegLogger>>(), IsDevelopmentBuild))
             .AddSingleton<DatabaseClient>()
+            .AddSingleton<PersistenceAvailability>()
             .AddSingleton<TrackQueueStateRepository>()
             .AddHttpClient("youtube-bytestream").AddStandardResilienceHandler(CreateHttpResiliencePipeline).Services
             .AddHttpClient<InvidiousCompanionClient>().AddStandardResilienceHandler(CreateHttpResiliencePipeline).Services
@@ -157,6 +160,7 @@ internal sealed class Program
             .AddComponentInteractions()
             .AddGatewayHandler<VoiceStateUpdateGatewayHandler>()
             .AddGatewayHandler<VoiceServerUpdateGatewayHandler>()
+            .AddGatewayHandler<DisconnectGatewayHandler>()
             .AddGatewayHandler<AutoPauseResumeVoiceStateUpdateGatewayHandler>()
             .AddGatewayHandler<InactivityTrackVoiceStateUpdateGatewayHandler>()
             .AddHostedService<CommandRegistrationService>();
