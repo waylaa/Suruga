@@ -133,6 +133,14 @@ internal sealed class OverlapAddSynthesizer
         return frames;
     }
 
+    internal void Clear()
+    {
+        Array.Clear(_output);
+        Array.Clear(_weights);
+
+        LengthFrames = 0;
+    }
+
     private void EnsureCapacity(int requiredFrames, int channels)
     {
         int requiredSamples = requiredFrames * channels;

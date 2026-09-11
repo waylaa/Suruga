@@ -75,6 +75,12 @@ internal sealed class Resampler : IAudioProcessor
         return AudioProcessorStatus.Success;
     }
 
+    public void Reset()
+    {
+        _input.Clear();
+        _state.Reset();
+    }
+
     private bool CanProduce(int outputFrames)
     {
         int requiredInputFrames = (int)Math.Ceiling(_state.Fraction + outputFrames * Rate) + 2;
@@ -170,10 +176,7 @@ internal sealed class Resampler : IAudioProcessor
 
         _state.HasHistory = true;
     }
-    
+
     public void Dispose()
-    {
-        _input.Clear();
-        _state.Reset();
-    }
+        => Reset();
 }

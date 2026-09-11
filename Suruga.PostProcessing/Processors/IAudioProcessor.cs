@@ -8,4 +8,6 @@ internal interface IAudioProcessor : IDisposable
     AudioProcessorStatus SendFrame(AudioFrameBuffer? frame);
     
     AudioProcessorStatus ReceiveFrame(out AudioFrameBuffer? frame);
+
+    void Reset();
 }

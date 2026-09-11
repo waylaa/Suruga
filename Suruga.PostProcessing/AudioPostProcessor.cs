@@ -68,6 +68,13 @@ public sealed class AudioPostProcessor(ILoggerFactory loggerFactory) : IDisposab
     public void SetGain(float value)
         => _gain.Gain = value;
 
+    public void Reset()
+    {
+        _timeStretch.Reset();
+        _resampler.Reset();
+        _gain.Reset();
+    }
+
     private void ApplyParameters()
     {
         _timeStretch.Tempo = _logicalTempo / _pitch;

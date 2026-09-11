@@ -142,7 +142,19 @@ internal sealed class TimeStretch : IAudioProcessor
         
         return AudioProcessorStatus.Success;
     }
-    
+
+    public void Reset()
+    {
+        _inputBuffer.Clear();
+        _synthesizer.Clear();
+
+        Array.Clear(_previousFrame);
+        
+        _nominalInputPosition = 0;
+        _outputPosition = 0;
+        _lastSearchRadius = 0;
+    }
+
     private void Process()
     {
         int iterations = 0;

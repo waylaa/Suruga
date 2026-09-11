@@ -52,6 +52,9 @@ internal sealed class GainProcessor : IAudioProcessor
         return AudioProcessorStatus.NeedMoreInput;
     }
 
+    public void Reset()
+        => _pendingFrame = null;
+
     public void Dispose()
     {
     }

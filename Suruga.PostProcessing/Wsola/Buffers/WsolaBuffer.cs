@@ -47,4 +47,7 @@ internal sealed class WsolaBuffer
         
         LengthFrames = remainingFrames;
     }
+
+    internal void Clear()
+        => LengthFrames = 0;
 }
