@@ -7,6 +7,7 @@
     <File Path=".env" />
     <File Path=".env.example" /> 
     <File Path="compose.yaml" />
+    <File Path="README.md" />
   </Folder>
   <Project Path="Suruga.FFmpeg/Suruga.FFmpeg.csproj" />
   <Project Path="Suruga.PostProcessing/Suruga.PostProcessing.csproj" />
