@@ -1,71 +1,106 @@
 using System.Diagnostics.CodeAnalysis;
+using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Options;
-using MongoDB.Driver;
 using Suruga.Options;
 
 namespace Suruga.Persistence;
 
-/// <summary>
-/// Provides access to MongoDB databases and manages the lifetime of the underlying client.
-/// </summary>
 internal sealed class DatabaseClient : IDisposable
 {
-	private readonly MongoClient _client;
-	private readonly DatabaseOptions _options;
-	
-	private bool _isDisposed;
+    private readonly DatabaseOptions _options;
+    private readonly string _connectionString;
+    private readonly Lock _lock = new();
+    
+    private bool _isInitialized;
+    private bool _isDisposed;
 
-    /// <summary>
-    /// Initializes a new instance of the <see cref="DatabaseClient"/> class.
-    /// </summary>
-    /// <param name="options">The database configuration options.</param>
     public DatabaseClient(IOptions<DatabaseOptions> options)
-	{
-		_options = options.Value;
-		
-		MongoClientSettings settings = MongoClientSettings.FromConnectionString(_options.ConnectionString);
-		settings.ServerSelectionTimeout = TimeSpan.FromSeconds(2);
-		settings.ConnectTimeout = TimeSpan.FromSeconds(2);
-		settings.SocketTimeout = TimeSpan.FromSeconds(2);
+    {
+        _options = options.Value;
+        
+        string path = string.IsNullOrWhiteSpace(_options.Path)
+            ? Path.Combine(AppContext.BaseDirectory, "suruga.db")
+            : _options.Path;
+        
+        _connectionString = new SqliteConnectionStringBuilder
+        {
+            DataSource = path,
+            Mode = SqliteOpenMode.ReadWriteCreate,
+            Cache = SqliteCacheMode.Shared
+        }.ToString();
+    }
 
-		_client = new MongoClient(settings);
-	}
+    internal bool TryGetConnection([NotNullWhen(true)] out SqliteConnection? connection)
+    {
+        connection = null;
 
-	/// <summary>
-	/// Gets a MongoDB database with the specified name.
-	/// </summary>
-	/// <param name="name">The name of the database.</param>
-	/// <returns>
-	/// The requested database if database support is enabled; otherwise, <see langword="null"/>.
-	/// </returns>
-	internal bool TryGetDatabase(string name, [NotNullWhen(true)] out IMongoDatabase? database)
-	{
-		database = null;
-		
-		if (!_options.Enable)
-		{
-			return false;
-		}
+        if (!_options.Enable)
+        {
+            return false;
+        }
 
-		try
-		{
-			database = _client.GetDatabase(name);
-			return true;
-		}
-		catch
-		{
-			return false;
-		}
-	}
+        try
+        {
+            connection = new SqliteConnection(_connectionString);
+            connection.Open();
 
-	public void Dispose()
-	{
-		if (_isDisposed)
-		{
-			return;
-		}
+            using (SqliteCommand pragma = connection.CreateCommand())
+            {
+                pragma.CommandText = "PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 2000;";
+                pragma.ExecuteNonQuery();
+            }
 
-		_isDisposed = true;
-		_client.Dispose();
-	}
+            EnsureSchema(connection);
+            return true;
+        }
+        catch (SqliteException)
+        {
+            connection?.Dispose();
+            connection = null;
+
+            return false;
+        }
+    }
+
+    private void EnsureSchema(SqliteConnection connection)
+    {
+        if (_isInitialized)
+        {
+            return;
+        }
+
+        using (_lock.EnterScope())
+        {
+            if (_isInitialized)
+            {
+                return;
+            }
+            
+            using SqliteCommand command = connection.CreateCommand();
+            
+            command.CommandText =
+                """
+                CREATE TABLE IF NOT EXISTS QueueStates (
+                    GuildId INTEGER PRIMARY KEY,
+                    CurrentIndex INTEGER NOT NULL,
+                    LoopMode TEXT NOT NULL,
+                    TracksJson TEXT NOT NULL
+                )
+                """;
+            
+            command.ExecuteNonQuery();
+            _isInitialized = true;
+        }
+    }
+    
+    public void Dispose()
+    {
+        if (_isDisposed)
+        {
+            return;
+        }
+        
+        _isDisposed = true;
+        SqliteConnection.ClearAllPools();
+    }
 }
