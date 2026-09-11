@@ -50,7 +50,9 @@ public sealed unsafe partial class FFmpegLogger
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static void Log(void* ptr, int level, byte* format, byte* vl)
     {
-        if (_logger is null)
+        ILogger? logger = _logger;
+        
+        if (logger is null)
         {
             return;
         }
@@ -75,34 +77,32 @@ public sealed unsafe partial class FFmpegLogger
             return;
         }
 
-        int actualLength = Math.Min(bytesWritten, bufferSize - 1);
-
-        ReadOnlySpan<byte> span = buffer[..actualLength];
-        string message = Encoding.UTF8.GetString(span);
+        int length = Math.Min(bytesWritten, bufferSize - 1);
+        ReadOnlySpan<byte> span = buffer[..length].TrimEnd("\r\n"u8);
         
-        // Trim the prefix and pointer address.
-        if (message.StartsWith('['))
+        if (span.IsEmpty || span.IndexOfAnyExcept(" \t\r\n"u8) < 0)
         {
-            int closingBracketIndex = message.IndexOf(']');
-            
-            if (closingBracketIndex >= 0)
-            {
-                message = message[(closingBracketIndex + 1)..].TrimStart();
-            }
+            return;
         }
-
-        if (string.IsNullOrWhiteSpace(message))
+        
+        // FFmpeg incorrectly reports this as an error at EOF when flushing the decoder.
+        if (span.IndexOf("Error parsing Opus packet header."u8) >= 0)
         {
             return;
         }
 
-        // FFmpeg incorrectly reports this as an error at EOF during decoder flushing. Ignore.
-        if (message.Contains("Error parsing Opus packet header."))
+        if (span.StartsWith((byte)'['))
         {
-            return; 
+            int closingBracketIndex = span.IndexOf((byte)']');
+
+            if (closingBracketIndex >= 0)
+            {
+                span = span[(closingBracketIndex + 1)..].TrimStart(" \t"u8);
+            }
         }
-        
-        Log(_logger, FromFFmpegLogLevel(level), message);
+
+        string message = Encoding.UTF8.GetString(span);
+        Log(logger, FromFFmpegLogLevel(level), message);
     }
 
     /// <summary>
