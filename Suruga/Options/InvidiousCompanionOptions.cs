@@ -23,7 +23,7 @@ internal sealed record InvidiousCompanionOptions
     /// <summary>
     /// Gets or sets the port used to connect to the Invidious Companion instance.
     /// </summary>
-    internal required ushort Port { get; set; }
+    internal required int Port { get; set; }
 
     /// <summary>
     /// Gets or sets a value indicating whether HTTPS should be used when connecting to the Invidious Companion instance.

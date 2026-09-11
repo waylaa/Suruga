@@ -147,14 +147,9 @@ internal sealed class TrackQueue
         return true;
     }
 
-    internal async Task SaveAsync(CancellationToken token = default)
-    {
-        await _repository.SaveAsync(new TrackQueueState
-        {
-            GuildId = _guildId,
-            Tracks = _tracks,
-            CurrentIndex = _currentIndex,
-            LoopMode = LoopMode
-        }, token);
-    }
+    internal Task SaveAsync(CancellationToken token = default)
+        => _repository.SaveAsync(new TrackQueueState { GuildId = _guildId, Tracks = _tracks, CurrentIndex = _currentIndex, LoopMode = LoopMode }, token);
+
+    internal Task RemovePersistedStateAsync(CancellationToken token = default)
+        => _repository.RemoveAsync(_guildId, token);
 }

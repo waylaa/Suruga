@@ -1,13 +1,12 @@
-﻿using System.Text;
-using System.Text.Json;
+﻿using System.Text.Json;
 using System.Text.Json.Nodes;
 using Suruga.Primitives;
 
 namespace Suruga.Resolvers.Youtube.Clients;
 
-internal sealed class YoutubeAndroidClient(HttpClient client) : YoutubeClient(client)
+internal sealed class YoutubeAndroidClient(HttpClient client) : YoutubeClient(client, InnertubeClientProfiles.Android)
 {
-    internal override async Task<Result<JsonDocument>> GetDynamicPlaylistAsync
+    internal override Task<Result<JsonDocument>> GetDynamicPlaylistAsync
     (
         string playlistId,
         string initialVideoId,
@@ -16,157 +15,31 @@ internal sealed class YoutubeAndroidClient(HttpClient client) : YoutubeClient(cl
         CancellationToken token = default
     )
     {
-        string visitorData = await GetVisitorDataAsync(token);
-
-        JsonObject body = new()
+        return ExecuteAsync("https://www.youtube.com/youtubei/v1/next", new JsonObject
         {
             ["playlistId"] = playlistId,
             ["videoId"] = initialVideoId,
             ["playlistIndex"] = playlistIndex,
-            ["continuation"] = continuationToken,
-            ["context"] = new JsonObject
-            {
-                ["client"] = new JsonObject
-                {
-                    ["clientName"] = "ANDROID",
-                    ["clientVersion"] = "21.14.483",
-                    ["osName"] = "Android",
-                    ["androidSdkVersion"] = 31,
-                    ["osVersion"] = "12",
-                    ["platform"] = "MOBILE",
-                    ["visitorData"] = visitorData,
-                    ["hl"] = "en",
-                    ["gl"] = "US",
-                    ["utcOffsetMinutes"] = (int)DateTimeOffset.Now.Offset.TotalMinutes
-                }
-            }
-        };
-
-        using HttpRequestMessage request = new(HttpMethod.Post, "https://www.youtube.com/youtubei/v1/next");
-        request.Headers.UserAgent.ParseAdd("com.google.android.youtube/21.14.483 (Linux; U; Android 12) gzip");
-        request.Headers.Add("X-Goog-Visitor-Id", visitorData);
-        request.Headers.Add("X-Youtube-Client-Name", "3"); // 3 -> ANDROID client.
-        request.Headers.Add("X-Youtube-Client-Version", "21.14.483");
-        request.Headers.Add("Origin", "https://www.youtube.com");
-        request.Headers.AcceptLanguage.ParseAdd("en-US,en;q=0.9");
-        request.Headers.Referrer = new Uri("https://www.youtube.com/");
-        request.Content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json");
-
-        using HttpResponseMessage response = await Client.SendAsync(request, token);
-
-        try
-        {
-            response.EnsureSuccessStatusCode();
-            
-            await using Stream jsonStream = await response.Content.ReadAsStreamAsync(token);
-            return await JsonDocument.ParseAsync(jsonStream, cancellationToken: token);
-        }
-        catch (Exception ex)
-        {
-            return Result<JsonDocument>.Failure(ex);
-        }
+            ["continuation"] = continuationToken
+        }, token);
     }
 
-    internal override async Task<Result<JsonDocument>> GetPlaylistAsync(string playlistId, string? continuationToken, CancellationToken token = default)
+    internal override Task<Result<JsonDocument>> GetPlaylistAsync(string playlistId, string? continuationToken, CancellationToken token = default)
     {
-        string visitorData = await GetVisitorDataAsync(token);
-
-        JsonObject body = new()
+        return ExecuteAsync("https://www.youtube.com/youtubei/v1/browse", new JsonObject
         {
             ["browseId"] = $"VL{playlistId}",
-            ["continuation"] = continuationToken,
-            ["context"] = new JsonObject
-            {
-                ["client"] = new JsonObject
-                {
-                    ["clientName"] = "ANDROID",
-                    ["clientVersion"] = "21.14.483",
-                    ["osName"] = "Android",
-                    ["androidSdkVersion"] = 31,
-                    ["osVersion"] = "12",
-                    ["platform"] = "MOBILE",
-                    ["visitorData"] = visitorData,
-                    ["hl"] = "en",
-                    ["gl"] = "US",
-                    ["utcOffsetMinutes"] = (int)DateTimeOffset.Now.Offset.TotalMinutes
-                }
-            }
-        };
-
-        using HttpRequestMessage request = new(HttpMethod.Post, "https://www.youtube.com/youtubei/v1/browse");
-        request.Headers.UserAgent.ParseAdd("com.google.android.youtube/21.14.483 (Linux; U; Android 12) gzip");
-        request.Headers.Add("X-Goog-Visitor-Id", visitorData);
-        request.Headers.Add("X-Youtube-Client-Name", "3"); // 3 -> ANDROID client.
-        request.Headers.Add("X-Youtube-Client-Version", "21.14.483");
-        request.Headers.Add("Origin", "https://www.youtube.com");
-        request.Headers.AcceptLanguage.ParseAdd("en-US,en;q=0.9");
-        request.Headers.Referrer = new Uri("https://www.youtube.com/");
-        request.Content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json");
-
-        using HttpResponseMessage response = await Client.SendAsync(request, token);
-        
-        try
-        {
-            response.EnsureSuccessStatusCode();
-            
-            await using Stream jsonStream = await response.Content.ReadAsStreamAsync(token);
-            return await JsonDocument.ParseAsync(jsonStream, cancellationToken: token);
-        }
-        catch (Exception ex)
-        {
-            return Result<JsonDocument>.Failure(ex);
-        }
+            ["continuation"] = continuationToken
+        }, token);
     }
 
-    internal override async Task<Result<JsonDocument>> SearchAsync(string query, CancellationToken token = default)
+    internal override Task<Result<JsonDocument>> SearchAsync(string query, CancellationToken token = default)
     {
-        string visitorData = await GetVisitorDataAsync(token);
-
-        JsonObject body = new()
+        return ExecuteAsync("https://www.youtube.com/youtubei/v1/search", new JsonObject
         {
             ["query"] = query,
-            ["params"] = "EgIQAQ%3D%3D", // Video-only filter.
-            ["continuation"] = null,
-            ["context"] = new JsonObject
-            {
-                ["client"] = new JsonObject
-                {
-                    ["clientName"] = "ANDROID",
-                    ["clientVersion"] = "21.14.483",
-                    ["osName"] = "Android",
-                    ["androidSdkVersion"] = 31,
-                    ["osVersion"] = "12",
-                    ["platform"] = "MOBILE",
-                    ["visitorData"] = visitorData,
-                    ["hl"] = "en",
-                    ["gl"] = "US",
-                    ["utcOffsetMinutes"] = (int)DateTimeOffset.Now.Offset.TotalMinutes
-                }
-            }
-        };
-
-        using HttpRequestMessage request = new(HttpMethod.Post, "https://www.youtube.com/youtubei/v1/search");
-        request.Headers.UserAgent.ParseAdd("com.google.android.youtube/21.14.483 (Linux; U; Android 12) gzip");
-        request.Headers.Add("X-Goog-Visitor-Id", visitorData);
-        request.Headers.Add("X-Youtube-Client-Name", "3"); // 3 -> ANDROID client.
-        request.Headers.Add("X-Youtube-Client-Version", "21.14.483");
-        request.Headers.Add("Origin", "https://www.youtube.com");
-        request.Headers.AcceptLanguage.ParseAdd("en-US,en;q=0.9");
-        request.Headers.Referrer = new Uri("https://www.youtube.com/");
-        request.Content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json");
-
-        using HttpResponseMessage response = await Client.SendAsync(request, token);
-        
-        try
-        {
-            response.EnsureSuccessStatusCode();
-            
-            await using Stream jsonStream = await response.Content.ReadAsStreamAsync(token);
-            return await JsonDocument.ParseAsync(jsonStream, cancellationToken: token);
-        }
-        catch (Exception ex)
-        {
-            return Result<JsonDocument>.Failure(ex);
-        }
+            ["params"] = "EgIQAQ%3D%3D",
+            ["continuation"] = null
+        }, token);
     }
 }

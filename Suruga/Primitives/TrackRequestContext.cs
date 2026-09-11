@@ -1,21 +1,23 @@
-﻿using NetCord;
+﻿using System.Text.Json.Serialization;
+using NetCord;
 
 namespace Suruga.Primitives;
 
 /// <summary>
 /// Represents the context of the user who requested a track, including their display name and avatar.
 /// </summary>
-public sealed record TrackRequestContext
+internal sealed record TrackRequestContext
 {
-	public string Name { get; }
+	internal string Name { get; }
 	
-	public string AvatarUrl { get; }
+	internal string AvatarUrl { get; }
 	
 	/// <summary>
 	/// </summary>
 	/// <param name="name">The display name of the user who requested the track.</param>
 	/// <param name="avatarUrl">The URL of the user's avatar.</param>
-	private TrackRequestContext(string name, string avatarUrl)
+	[JsonConstructor]
+	internal TrackRequestContext(string name, string avatarUrl)
 	{
 		Name = name;
 		AvatarUrl = avatarUrl;

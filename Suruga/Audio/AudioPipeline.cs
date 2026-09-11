@@ -31,12 +31,5 @@ internal sealed class AudioPipeline
             
             yield return postProcessed;
         }
-        
-        /*
-        while (!token.IsCancellationRequested && _postProcessor.TryFlush(out AudioFrameBuffer? flushed))
-        {
-            yield return flushed;
-        }
-        */
     }
 }

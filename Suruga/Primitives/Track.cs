@@ -3,52 +3,59 @@
 /// <summary>
 /// Represents an audio track with its associated metadata and playback information.
 /// </summary>
-public sealed class Track
+internal sealed class Track
 {
-    /// <summary>
-    /// Gets the platform where the track originates from.
-    /// </summary>
-    public required TrackPlatform Platform { get; init; }
+	/// <summary>
+	/// Gets the platform where the track originates from.
+	/// </summary>
+	internal TrackPlatform Platform { get; }
 
     /// <summary>
     /// Gets the unique identifier of the track on its source platform.
     /// </summary>
-    public required string Id { get; init; }
+    internal string Id { get; }
 
     /// <summary>
     /// Gets the URI or file path used to locate and stream the track.
     /// </summary>
-    public required string Uri { get; init; }
+    internal string Uri { get; }
 
     /// <summary>
     /// Gets the title of the track.
     /// </summary>
-    public string? Title { get; init; }
+    internal string? Title { get; init; }
 
     /// <summary>
     /// Gets the author, artist, or uploader of the track.
     /// </summary>
-    public string? Author { get; init; }
+    internal string? Author { get; init; }
 
     /// <summary>
     /// Gets the URI of the track's thumbnail or cover art.
     /// </summary>
-    public string? ThumbnailUri { get; init; }
+    internal string? ThumbnailUri { get; init; }
 
     /// <summary>
     /// Gets the total duration of the track.
     /// </summary>
-    public TimeSpan? Duration { get; init; }
+    internal TimeSpan? Duration { get; init; }
 
     /// <summary>
     /// Gets the starting position for playback within the track.
     /// </summary>
-    public TimeSpan? StartPosition { get; init; }
+    internal TimeSpan? StartPosition { get; init; }
 
     /// <summary>
     /// Gets the context or user who requested the track.
     /// </summary>
-    public TrackRequestContext? RequestedBy { get; init; }
+    internal TrackRequestContext? RequestedBy { get; init; }
+
+    internal Track(TrackPlatform platform, string id, string uri)
+    {
+	    Platform = platform;
+	    Id = id;
+	    Uri = uri;
+    }
 
     /// <summary>
     /// Returns a string representation of the track.

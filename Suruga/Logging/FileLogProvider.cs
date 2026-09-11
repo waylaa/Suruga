@@ -18,11 +18,14 @@ internal sealed class FileLogProvider : ILoggerProvider
 	
 	private readonly LogLevel _minimumLevel;
 	private readonly string _logDirectoryPath;
+	
 	private readonly Lock _lock = new();
-
+	private readonly PeriodicTimer? _retentionTimer;
+	
 	private DateOnly _currentDate;
 	private StreamWriter? _logWriter;
 	private FileStream? _logStream;
+	private bool _isContainer;
 	
 	private const string LogFileExtension = ".log";
 	private const string CompressedLogFileExtension = ".log.gz";
@@ -37,8 +40,9 @@ internal sealed class FileLogProvider : ILoggerProvider
 	{
 		_minimumLevel = minimumLevel;
 		_logDirectoryPath = logDirectoryPath;
-		
-		if (Environment.GetEnvironmentVariable("DOTNET_RUNNING_IN_CONTAINER") == "true")
+		_isContainer = Environment.GetEnvironmentVariable("DOTNET_RUNNING_IN_CONTAINER") == "true";
+
+		if (_isContainer)
 		{
 			return;
 		}
@@ -47,29 +51,28 @@ internal sealed class FileLogProvider : ILoggerProvider
 		_currentDate = DateOnly.FromDateTime(DateTime.UtcNow);
 
 		OpenLogFile(_currentDate);
-		
-		_ = Task.Run(async () =>
-		{
-			try
-			{
-				ApplyRetentionPolicy();
-			}
-			catch
-			{
-				return;
-			}
-			
-			await Task.Delay(TimeSpan.FromHours(1));
-		});
+
+		_retentionTimer = new PeriodicTimer(TimeSpan.FromHours(1));
+		_ = RunRetentionLoopAsync();
 	}
 
 	public ILogger CreateLogger(string categoryName)
 		=> new FileLogger(this, categoryName, _minimumLevel);
 
-	public void Dispose()
+	private async Task RunRetentionLoopAsync()
 	{
-		_logWriter?.Dispose();
-		_logStream?.Dispose();
+		try
+		{
+			ApplyRetentionPolicy();
+
+			while (await _retentionTimer!.WaitForNextTickAsync())
+			{
+				ApplyRetentionPolicy();
+			}
+		}
+		catch (ObjectDisposedException)
+		{
+		}
 	}
 
     /// <summary>
@@ -173,9 +176,9 @@ internal sealed class FileLogProvider : ILoggerProvider
 		{
 			using FileStream outputLogStream = File.Create(compressedPath);
 			using GZipStream logCompressionStream = new(outputLogStream, CompressionLevel.Optimal);
-            using FileStream inputLogStream = File.OpenRead(logFilePath);
+			using FileStream inputLogStream = File.OpenRead(logFilePath);
 
-            inputLogStream.CopyTo(logCompressionStream);
+			inputLogStream.CopyTo(logCompressionStream);
 		}
 		catch
 		{
@@ -193,12 +196,19 @@ internal sealed class FileLogProvider : ILoggerProvider
 		}
 		catch
 		{
-			// Ignore transient IO failures.
+			// Ignore.
 		}
 	}
 	
 	private string GetLogFilePath(DateOnly date)
 		=> Path.Combine(_logDirectoryPath, $"{date.ToString(DateFormat)}.log");
+	
+	public void Dispose()
+	{
+		_retentionTimer?.Dispose();
+		_logWriter?.Dispose();
+		_logStream?.Dispose();
+	}
 
 	private sealed class FileLogger : ILogger
 	{
@@ -221,7 +231,7 @@ internal sealed class FileLogProvider : ILoggerProvider
 
 		public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
 		{
-			if (!IsEnabled(logLevel) || Environment.GetEnvironmentVariable("DOTNET_RUNNING_IN_CONTAINER") == "true")
+			if (!IsEnabled(logLevel) || _provider._isContainer)
 			{
 				return;
 			}

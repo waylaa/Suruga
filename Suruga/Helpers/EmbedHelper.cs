@@ -1,6 +1,4 @@
-﻿using System.Text;
-using Microsoft.Extensions.ObjectPool;
-using NetCord;
+﻿using NetCord;
 using NetCord.Rest;
 using Suruga.Pagination;
 using Suruga.Primitives;
@@ -16,9 +14,6 @@ namespace Suruga.Helpers;
 /// </remarks>
 internal static class EmbedHelper
 {
-	private static readonly ObjectPool<StringBuilder> StringBuilderPool =
-		new DefaultObjectPool<StringBuilder>(new StringBuilderPooledObjectPolicy());
-	
 	private static readonly Color SuccessColor = new(215, 0, 64);
 
 	private static readonly Color FailureColor = new(139, 0, 0);
@@ -49,77 +44,30 @@ internal static class EmbedHelper
     internal static EmbedProperties Errored(Track track)
 		=> BuildTrackEmbed(track, "❌ Failed to play", FailureColor);
 
-    /// <summary>
-    /// Creates an embed representing the current queue state.
-    /// </summary>
-    /// <param name="currentTrack">The currently playing track, if any.</param>
-    /// <param name="user">The user requesting the queue.</param>
-    /// <param name="paginator">The paginated queue data.</param>
-    /// <returns>An embed containing the queue contents.</returns>
     internal static EmbedProperties Queue(Track? currentTrack, GuildUser user, Paginator<Track> paginator)
-	{
-		StringBuilder builder = StringBuilderPool.Get();
-		
-		if (currentTrack is not null)
-		{
-			builder.AppendLine($"▶ Now playing: {currentTrack}");
-		}
+    {
+	    string leadingLine = currentTrack is not null ? $"▶ Now playing: {currentTrack}" : null!;
+	    string description = PaginatedListRenderer.Render(paginator, "Queue is empty.", leadingLine);
 
-		foreach ((int Index, Track Track) value in paginator.GetPage().Index())
-		{
-			builder.AppendLine($"{value.Index}. {value.Track}");
-		}
+	    return new EmbedProperties()
+		    .WithColor(SuccessColor)
+		    .WithTimestamp(DateTimeOffset.Now)
+		    .WithTitle("Queue")
+		    .WithDescription(description)
+		    .WithFooter(DiscordUserDisplay.PaginationFooter(user, paginator.CurrentPage, paginator.TotalPages));
+    }
 
-		if (builder.Length <= 0)
-		{
-			builder.AppendLine("Queue is empty.");
-		}
-		
-		string description = builder.ToString();
-		StringBuilderPool.Return(builder);
-
-		return new EmbedProperties()
-			.WithColor(SuccessColor)
-			.WithTimestamp(DateTimeOffset.Now)
-			.WithTitle("Queue")
-			.WithDescription(description)
-			.WithFooter(new EmbedFooterProperties()
-				.WithIconUrl(GetUserAvatarUrl(user))
-				.WithText($"{GetUserName(user)} • Page {paginator.CurrentPage + 1}/{paginator.TotalPages}"));
-	}
-
-    /// <summary>
-    /// Creates an embed representing playback history.
-    /// </summary>
-    /// <param name="user">The user requesting the history.</param>
-    /// <param name="paginator">The paginated history data.</param>
-    /// <returns>An embed containing playback history.</returns>
     internal static EmbedProperties History(GuildUser user, Paginator<Track> paginator)
-	{
-		StringBuilder builder = StringBuilderPool.Get();
+    {
+	    string description = PaginatedListRenderer.Render(paginator, "No tracks have been played.");
 
-		foreach ((int Index, Track Track) value in paginator.GetPage().Index())
-		{
-			builder.AppendLine($"{value.Index}. {value.Track}");
-		}
-
-		if (builder.Length <= 0)
-		{
-			builder.AppendLine("No tracks have been played.");
-		}
-		
-		string description = builder.ToString();
-		StringBuilderPool.Return(builder);
-		
-		return new EmbedProperties()
-			.WithColor(SuccessColor)
-			.WithTimestamp(DateTimeOffset.Now)
-			.WithTitle("Playback History")
-			.WithDescription(description)
-			.WithFooter(new EmbedFooterProperties()
-				.WithIconUrl(GetUserAvatarUrl(user))
-				.WithText($"{GetUserName(user)} • Page {paginator.CurrentPage + 1}/{paginator.TotalPages}"));
-	}
+	    return new EmbedProperties()
+		    .WithColor(SuccessColor)
+		    .WithTimestamp(DateTimeOffset.Now)
+		    .WithTitle("Playback History")
+		    .WithDescription(description)
+		    .WithFooter(DiscordUserDisplay.PaginationFooter(user, paginator.CurrentPage, paginator.TotalPages));
+    }
 
     /// <summary>
     /// Creates an embed indicating that playback was automatically paused.
@@ -157,20 +105,4 @@ internal static class EmbedHelper
 				.WithIconUrl(track.RequestedBy?.AvatarUrl)
 				.WithText(track.RequestedBy?.Name));
 	}
-
-    /// <summary>
-    /// Gets the best available avatar URL for a guild user.
-    /// </summary>
-    /// <param name="user">The user whose avatar should be retrieved.</param>
-    /// <returns>A string representation of the user's avatar URL.</returns>
-    private static string GetUserAvatarUrl(GuildUser user)
-		=> user.GetGuildAvatarUrl()?.ToString() ?? user.GetAvatarUrl()?.ToString() ?? user.DefaultAvatarUrl.ToString();
-
-    /// <summary>
-    /// Gets the display name for a guild user.
-    /// </summary>
-    /// <param name="user">The user whose name should be retrieved.</param>
-    /// <returns>The best available display name.</returns>
-    private static string GetUserName(GuildUser user)
-		=> user.Nickname ?? user.GlobalName ?? user.Username;
 }

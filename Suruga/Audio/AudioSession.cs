@@ -34,12 +34,8 @@ internal sealed class AudioSession : IAsyncDisposable
         Player = new AudioPlayer(trackStreamResolverRouter, byteStreamFactory, repository, Connection.Sink, loggerFactory, guildId);
         PlayerMessage = new AudioPlayerMessageHandler();
 
-        Connection.Disconnected += OnDisconnectedAsync;
         Player.PlayerStateChanged += OnPlayerStateChangedAsync;
     }
-
-    private ValueTask OnDisconnectedAsync()
-        => Player.DisposeAsync();
     
     private Task OnPlayerStateChangedAsync(AudioPlayerState state, Track? track, Exception? error)
         => PlayerMessage.UpdateAsync(state, track, error);

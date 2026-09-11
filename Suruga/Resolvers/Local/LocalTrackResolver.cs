@@ -14,16 +14,6 @@ internal partial class LocalTrackResolver(ILogger<LocalTrackResolver> logger) : 
 {
     public TrackPlatform Platform => TrackPlatform.Local;
     
-    /// <summary>
-    /// Resolves a local file path into a single <see cref="Track"/>.
-    /// </summary>
-    /// <param name="input">The file path to resolve.</param>
-    /// <param name="requestedBy"></param>
-    /// <param name="token">A token that can cancel the resolution operation.</param>
-    /// <returns>
-    /// A task that completes with a read-only list containing the
-    /// resolved track, or an empty list if resolution fails.
-    /// </returns>
     public ValueTask<Result<TrackSet>> ResolveAsync(Input input, TrackRequestContext requestedBy, CancellationToken token = default)
     {
         string filePath = input.Value;
@@ -34,37 +24,13 @@ internal partial class LocalTrackResolver(ILogger<LocalTrackResolver> logger) : 
             using FormatContext formatContext = new(filePath);
             StreamInfo info = formatContext.GetStream();
 
-            DictionaryView formatContextMetadataView = new(in formatContext.Metadata);
-            DictionaryView streamMetadataView = new(in info.Stream.Metadata);
+            LocalTrackMetadataExtractor.LocalTrackMetadata metadata = LocalTrackMetadataExtractor.Extract(formatContext, info, fileName);
 
-            if (!formatContextMetadataView.TryGetValue("title", out string? title))
+            Track track = new(TrackPlatform.Local, fileName, filePath)
             {
-                title = fileName;
-            }
-
-            if (!formatContextMetadataView.TryGetValue("artist", out string? artist))
-            {
-                artist = streamMetadataView.TryGetValue("album_artist", out string? albumArtist) ? albumArtist : "Unknown";
-            }
-
-            long durationInTimeBaseUnits = formatContext.Duration;
-
-            if (durationInTimeBaseUnits <= 0)
-                if (streamMetadataView.TryGetValue("DURATION", out string? dur))
-                    if (long.TryParse(dur, out durationInTimeBaseUnits))
-                    {
-                    }
-
-            TimeSpan? duration = TimeSpan.FromSeconds(durationInTimeBaseUnits / (double)Constants.AV_TIME_BASE);
-
-            Track track = new()
-            {
-                Platform = TrackPlatform.Local,
-                Id = fileName,
-                Uri = filePath,
-                Title = title,
-                Author = artist,
-                Duration = duration,
+                Title = metadata.Title,
+                Author = metadata.Artist,
+                Duration = metadata.Duration,
                 RequestedBy = requestedBy
             };
 

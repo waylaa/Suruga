@@ -21,7 +21,7 @@ internal sealed class AudioSessionManager
 {
     private readonly ConcurrentDictionary<ulong, AudioSession> _sessions = [];
 
-    internal AudioSession GetOrCreateSession(ulong guildId, ulong textChannelId)
+    internal AudioSession GetOrCreateSession(ulong guildId)
     {
         if (_sessions.TryGetValue(guildId, out AudioSession? session))
         {

@@ -16,12 +16,7 @@ namespace Suruga.Resolvers.Youtube;
 /// <param name="clientRouter">The client router.</param>
 /// <param name="playerClient">The player client.</param>
 /// <param name="cache">The underlying cache.</param>
-internal sealed class YoutubeTrackResolver
-(
-    YoutubeClientRouter clientRouter,
-    InvidiousCompanionClient playerClient,
-    IMemoryCache cache
-) : ITrackResolver
+internal sealed class YoutubeTrackResolver(YoutubeClientRouter clientRouter, InvidiousCompanionClient playerClient, IMemoryCache cache) : ITrackResolver
 {
     public TrackPlatform Platform => TrackPlatform.Youtube;
 
@@ -91,11 +86,8 @@ internal sealed class YoutubeTrackResolver
         
         string videoUrl = $"https://www.youtube.com/watch?v={videoId}";
 
-        Track descriptor = new()
+        Track descriptor = new(TrackPlatform.Youtube, videoId, videoUrl)
         {
-            Platform = TrackPlatform.Youtube,
-            Id = videoId,
-            Uri = videoUrl,
             Title = details.TraverseValue<string>("title") ?? "Unknown",
             Author = details.TraverseValue<string>("author") ?? "Unknown",
             ThumbnailUri = details
@@ -271,11 +263,8 @@ internal sealed class YoutubeTrackResolver
                     continue;
                 }
                 
-                tracks.Add(new Track
+                tracks.Add(new Track(TrackPlatform.Youtube, videoId, $"https://www.youtube.com/watch?v={videoId}")
                 {
-                    Platform = TrackPlatform.Youtube,
-                    Id = videoId,
-                    Uri = $"https://www.youtube.com/watch?v={videoId}",
                     Title = video.TraverseOrDefault("title", "runs")
                         .GetElementAtOrDefault(0)
                         .TraverseValue<string>("text") ?? "Unknown",
@@ -381,11 +370,8 @@ internal sealed class YoutubeTrackResolver
                 continue;
             }
             
-            tracks.Add(new Track
+            tracks.Add(new Track(TrackPlatform.Youtube, videoId, $"https://www.youtube.com/watch?v={videoId}")
             {
-                Platform = TrackPlatform.Youtube,
-                Id = videoId,
-                Uri = $"https://www.youtube.com/watch?v={videoId}",
                 Title = video
                     .TraverseOrDefault("title", "runs")
                     .GetElementAtOrDefault(0)

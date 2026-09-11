@@ -41,7 +41,6 @@ internal sealed partial class AudioLogger(ILogger<AudioLogger> logger) : NetCord
     public void Log<TState>(NetCordLogLevel logLevel, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
         => Log(Map(logLevel), exception, formatter(state, exception));
 
-
     /// <summary>
     /// Maps a NetCord log level to a Microsoft <see cref="LogLevel"/>.
     /// </summary>

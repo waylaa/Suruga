@@ -1,5 +1,4 @@
 ﻿using Microsoft.Extensions.Logging;
-using Suruga.Primitives;
 using Suruga.Resolvers.Primitives;
 using Suruga.Resolvers.Sources;
 
@@ -25,13 +24,13 @@ internal sealed class ReadOnlyAudioByteStreamFactory(IHttpClientFactory clientFa
         return source switch
         {
             LocalStreamSource { FilePath: string filePath }
-                => new LocalReadOnlyAudioByteStream(filePath, loggerFactory.CreateLogger<LocalReadOnlyAudioByteStream>()),
+                => new Local.LocalReadOnlyAudioByteStream(filePath, loggerFactory.CreateLogger<Local.LocalReadOnlyAudioByteStream>()),
             
-            YoutubeStreamSource { Formats: IReadOnlyList<AdaptiveFormat> formats } => new YoutubeReadOnlyAudioByteStream
+            YoutubeStreamSource { Formats: IReadOnlyList<AdaptiveFormat> formats } => new Youtube.YoutubeReadOnlyAudioByteStream
             (
                 clientFactory.CreateClient("youtube-bytestream"),
                 formats,
-                loggerFactory.CreateLogger<YoutubeReadOnlyAudioByteStream>()
+                loggerFactory.CreateLogger<Youtube.YoutubeReadOnlyAudioByteStream>()
             ),
             
             _ => throw new InvalidOperationException("Unsupported platform.")

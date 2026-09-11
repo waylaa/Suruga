@@ -1,9 +1,7 @@
 ﻿using NetCord.Gateway;
 using NetCord.Hosting.Gateway;
 using Suruga.Audio;
-using Suruga.Audio.Commands.Connection;
 using Suruga.Audio.Commands.Voice;
-using Suruga.Audio.Primitives;
 
 namespace Suruga.Handlers;
 
@@ -16,11 +14,7 @@ namespace Suruga.Handlers;
 /// It updates the underlying audio connection descriptor when the bot joins,
 /// moves, or disconnects from a voice channel.
 /// </remarks>
-internal sealed class VoiceStateUpdateGatewayHandler
-(
-    GatewayClient client,
-    AudioSessionManager sessionManager
-) : IVoiceStateUpdateGatewayHandler
+internal sealed class VoiceStateUpdateGatewayHandler (GatewayClient client, AudioSessionManager sessionManager ) : IVoiceStateUpdateGatewayHandler
 {
     /// <summary>
     /// Processes a voice state update event and updates the audio connection descriptor accordingly.
@@ -35,19 +29,5 @@ internal sealed class VoiceStateUpdateGatewayHandler
         }
         
         await session.Connection.PostAsync(new VoiceStateUpdateEventCommand(arg.GuildId, arg.UserId, arg.ChannelId, arg.SessionId));
-
-        /*
-        AudioConnection.AudioConnectionDescriptor descriptor = session.Player.Engine.Connection.Descriptor;
-
-        // Disconnected from voice.
-        if (arg.ChannelId is null)
-        {
-            descriptor.Invalidate();
-            return ValueTask.CompletedTask;
-        }
-
-        descriptor.UpdateVoiceState(arg.GuildId, arg.UserId, arg.ChannelId, arg.SessionId);
-        return ValueTask.CompletedTask;
-        */
     }
 }

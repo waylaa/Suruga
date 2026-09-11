@@ -1,6 +1,4 @@
-﻿using System.Collections.ObjectModel;
-
-namespace Suruga.Pagination;
+﻿namespace Suruga.Pagination;
 
 /// <summary>
 /// Provides page-based navigation over a collection of items.

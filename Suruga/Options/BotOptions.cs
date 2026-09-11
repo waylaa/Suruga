@@ -18,5 +18,5 @@ internal sealed record BotOptions
     /// <summary>
     /// Gets or sets the folder path to the FFmpeg runtimes.
     /// </summary>
-    internal required string? FFmpegPath { get; set; }
+    internal required string FFmpegPath { get; set; }
 }

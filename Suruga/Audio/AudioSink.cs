@@ -14,7 +14,6 @@ internal sealed class AudioSink : IAsyncDisposable
     internal async Task WriteAsync(ReadOnlyMemory<byte> pcm, CancellationToken token = default)
     {
         await _readyTcs.Task.WaitAsync(token);
-
         await _lock.WaitAsync(token);
 
         try
@@ -35,7 +34,6 @@ internal sealed class AudioSink : IAsyncDisposable
     internal async Task FlushAsync(CancellationToken token = default)
     {
         await _readyTcs.Task.WaitAsync(token);
-        
         await _lock.WaitAsync(token);
 
         try
@@ -64,8 +62,7 @@ internal sealed class AudioSink : IAsyncDisposable
                 return;
             }
 
-            _encodeStream =
-                new OpusEncodeStream(voiceStream, PcmFormat.Float, VoiceChannels.Stereo, OpusApplication.Audio);
+            _encodeStream = new OpusEncodeStream(voiceStream, PcmFormat.Float, VoiceChannels.Stereo, OpusApplication.Audio);
             _readyTcs.TrySetResult();
         }
         finally

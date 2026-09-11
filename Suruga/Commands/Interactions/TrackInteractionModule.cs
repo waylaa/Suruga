@@ -1,4 +1,5 @@
-﻿using NetCord;
+﻿using System.Diagnostics.CodeAnalysis;
+using NetCord;
 using NetCord.Rest;
 using NetCord.Services.ComponentInteractions;
 using Suruga.Audio;
@@ -13,124 +14,60 @@ internal sealed class TrackInteractionModule(AudioSessionManager sessionManager)
     [ComponentInteraction("player_loop_toggle")]
     public async Task ToggleLoopOnCurrentTrack()
     {
-        if (!sessionManager.TryGetSession(Context.Guild!.Id, out AudioSession? session))
+        if (!TryGetSession(out AudioSession? session))
         {
-            await RespondAsync(InteractionCallback.Message(new InteractionMessageProperties().NotInVoiceChannelMessage()));
             return;
         }
 
         CommandResult result = await session.Player.PostAsync(new LoopAudioCommand(null));
-
-        await RespondAsync(InteractionCallback.Message(new InteractionMessageProperties()
-            .WithContent($"Loop mode set to {result.Data}.")
-            .WithFlags(MessageFlags.Ephemeral)));
+        await RespondEphemeralAsync($"Loop mode set to {result.Data}.");
     }
 
     [ComponentInteraction("player_pause")]
-    public async Task PauseCurrentTrack()
-    {
-        if (!sessionManager.TryGetSession(Context.Guild!.Id, out AudioSession? session))
-        {
-            await RespondAsync(InteractionCallback.Message(new InteractionMessageProperties().NotInVoiceChannelMessage()));
-            return;
-        }
-        
-        CommandResult result = await session.Player.PostAsync(new PauseAudioCommand());
-
-        switch (result.Status)
-        {
-            case CommandStatus.Success:
-                await RespondAsync(InteractionCallback.Message(new InteractionMessageProperties()
-                    .WithContent("Playback paused.")
-                    .WithFlags(MessageFlags.Ephemeral)));
-                break;
-            
-            case CommandStatus.AlreadyPaused:
-                await RespondAsync(InteractionCallback.Message(new InteractionMessageProperties()
-                    .WithContent("There is nothing to pause.")
-                    .WithFlags(MessageFlags.Ephemeral)));
-                break;
-        }
-    }
+    public Task PauseCurrentTrack()
+        => ExecuteAsync(new PauseAudioCommand(), "Playback paused.");
 
     [ComponentInteraction("player_resume")]
-    public async Task ResumeCurrentTrack()
-    {
-        if (!sessionManager.TryGetSession(Context.Guild!.Id, out AudioSession? session))
-        {
-            await RespondAsync(InteractionCallback.Message(new InteractionMessageProperties().NotInVoiceChannelMessage()));
-            return;
-        }
-
-        CommandResult result = await session.Player.PostAsync(new ResumeAudioCommand());
-
-        switch (result.Status)
-        {
-            case CommandStatus.Success:
-                await RespondAsync(InteractionCallback.Message(new InteractionMessageProperties()
-                    .WithContent("Playback resumed.")
-                    .WithFlags(MessageFlags.Ephemeral)));
-                break;
-            
-            case CommandStatus.AlreadyPlaying:
-                await RespondAsync(InteractionCallback.Message(new InteractionMessageProperties()
-                    .WithContent("There is nothing to resume.")
-                    .WithFlags(MessageFlags.Ephemeral)));
-                break;
-        }
-    }
+    public Task ResumeCurrentTrack()
+        => ExecuteAsync(new ResumeAudioCommand(), "Playback resumed.");
 
     [ComponentInteraction("player_skip")]
-    public async Task SkipCurrentTrack()
-    {
-        if (!sessionManager.TryGetSession(Context.Guild!.Id, out AudioSession? session))
-        {
-            await RespondAsync(InteractionCallback.Message(new InteractionMessageProperties().NotInVoiceChannelMessage()));
-            return;
-        }
-        
-        CommandResult result = await session.Player.PostAsync(new SkipAudioCommand());
-
-        switch (result.Status)
-        {
-            case CommandStatus.Success:
-                await RespondAsync(InteractionCallback.Message(new InteractionMessageProperties()
-                    .WithContent("Track skipped.")
-                    .WithFlags(MessageFlags.Ephemeral)));
-                break;
-            
-            case CommandStatus.NothingToSkip:
-                await RespondAsync(InteractionCallback.Message(new InteractionMessageProperties()
-                    .WithContent("There is nothing to skip.")
-                    .WithFlags(MessageFlags.Ephemeral)));
-                break;
-        }
-    }
+    public Task SkipCurrentTrack()
+        => ExecuteAsync(new SkipAudioCommand(), "Track skipped.");
 
     [ComponentInteraction("player_stop")]
-    public async Task StopCurrentTrack()
+    public Task StopCurrentTrack()
+        => ExecuteAsync(new StopAudioCommand(), "Playback stopped.");
+
+    private async Task ExecuteAsync(PlaybackCommand command, string successMessage)
     {
-        if (!sessionManager.TryGetSession(Context.Guild!.Id, out AudioSession? session))
+        if (!TryGetSession(out AudioSession? session))
         {
-            await RespondAsync(InteractionCallback.Message(new InteractionMessageProperties().NotInVoiceChannelMessage()));
             return;
         }
-        
-        CommandResult result = await session.Player.PostAsync(new StopAudioCommand());
 
-        switch (result.Status)
+        CommandResult result = await session.Player.PostAsync(command);
+        string? message = result.Status is CommandStatus.Success ? successMessage : PlaybackCommandResponses.MessageFor(result.Status);
+
+        if (message is not null)
         {
-            case CommandStatus.Success:
-                await RespondAsync(InteractionCallback.Message(new InteractionMessageProperties()
-                    .WithContent("Playback stopped.")
-                    .WithFlags(MessageFlags.Ephemeral)));
-                break;
-            
-            case CommandStatus.AlreadyStopped:
-                await RespondAsync(InteractionCallback.Message(new InteractionMessageProperties()
-                    .WithContent("There is nothing to stop.")
-                    .WithFlags(MessageFlags.Ephemeral)));
-                break;
+            await RespondEphemeralAsync(message);
         }
     }
+
+    private bool TryGetSession([NotNullWhen(true)] out AudioSession? session)
+    {
+        if (sessionManager.TryGetSession(Context.Guild!.Id, out session))
+        {
+            return true;
+        }
+
+        _ = RespondAsync(InteractionCallback.Message(new InteractionMessageProperties().NotInVoiceChannelMessage()));
+        return false;
+    }
+
+    private Task<InteractionCallbackResponse?> RespondEphemeralAsync(string content)
+        => RespondAsync(InteractionCallback.Message(new InteractionMessageProperties()
+            .WithContent(content)
+            .WithFlags(MessageFlags.Ephemeral)));
 }

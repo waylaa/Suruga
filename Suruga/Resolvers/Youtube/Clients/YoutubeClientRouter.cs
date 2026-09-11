@@ -23,11 +23,8 @@ internal sealed class YoutubeClientRouter(IEnumerable<YoutubeClient> clients)
 	/// A task that completes with the result of the first successful
 	/// client, or <see langword="null"/> if all clients fail.
 	/// </returns>
-	internal async Task<Result<T>> RequestAsync<T>
-	(
-		Func<YoutubeClient, CancellationToken, Task<Result<T>>> action,
-		CancellationToken token = default
-	) where T : class
+	internal async Task<Result<T>> RequestAsync<T>(Func<YoutubeClient, CancellationToken, Task<Result<T>>> action, CancellationToken token = default)
+		where T : class
 	{
 		Exception? lastException = null;
 		

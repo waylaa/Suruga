@@ -11,12 +11,8 @@ internal sealed record DatabaseOptions
     internal required bool Enable { get; set; }
 
     /// <summary>
-    /// Gets or sets the connection string used to connect to the database server.
+    /// Gets or sets the file path of the SQLite database.
+    /// Defaults to 'suruga.db' if not set.
     /// </summary>
-    internal required string ConnectionString { get; set; }
-
-    /// <summary>
-    /// Gets or sets the name of the database.
-    /// </summary>
-    internal required string Name { get; set; }
+    internal required string? Path { get; set; }
 }

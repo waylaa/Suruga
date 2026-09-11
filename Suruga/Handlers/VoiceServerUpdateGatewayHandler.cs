@@ -1,7 +1,6 @@
 ﻿using NetCord.Gateway;
 using NetCord.Hosting.Gateway;
 using Suruga.Audio;
-using Suruga.Audio.Commands.Connection;
 using Suruga.Audio.Commands.Voice;
 
 namespace Suruga.Handlers;
@@ -30,24 +29,5 @@ internal sealed class VoiceServerUpdateGatewayHandler(AudioSessionManager sessio
 		}
 		
 		await session.Connection.PostAsync(new VoiceServerUpdateEventCommand(arg.Endpoint, arg.Token));
-
-		/*
-		if (arg.Endpoint is null)
-		{
-			connection.Descriptor.Invalidate();
-			return;
-		}
-
-		string? previousEndpoint = connection.Descriptor.Endpoint;
-		connection.Descriptor.UpdateVoiceServer(arg.Endpoint, arg.Token);
-
-        // Reconnect only when:
-        // - this is not the initial voice connection (previous endpoint exists)
-        // - and the endpoint has changed
-        if (previousEndpoint is not null && previousEndpoint != arg.Endpoint)
-		{
-			await connection.ReconnectAsync();
-		}
-		*/
 	}
 }

@@ -1,8 +1,9 @@
 ﻿using Microsoft.Extensions.Logging;
 using Microsoft.Win32.SafeHandles;
 using Suruga.Transport.Extensions;
+using Suruga.Transport.Policies;
 
-namespace Suruga.Transport;
+namespace Suruga.Transport.Local;
 
 /// <summary>
 /// A read-only audio byte stream that reads data directly from a local file
@@ -48,6 +49,7 @@ internal sealed partial class LocalReadOnlyAudioByteStream : ReadOnlyAudioByteSt
     {
         _logger = logger;
         _fileHandle = File.OpenHandle(streamUri);
+        
         Length = RandomAccess.GetLength(_fileHandle);
     }
 
@@ -71,31 +73,21 @@ internal sealed partial class LocalReadOnlyAudioByteStream : ReadOnlyAudioByteSt
     {
         if (buffer.IsEmpty || Position >= Length)
         {
-            return 0; // EOS.
-        }
-        
-        for (int attempt = 0; attempt < 3; attempt++)
-        {
-            try
-            {
-                int bytesRead = RandomAccess.Read(_fileHandle, buffer, Position);
-                Position += bytesRead;
-                
-                LogBuffering(Position.ToFormattedBytes(), Length.ToFormattedBytes());
-                return bytesRead;
-            }
-            catch (IOException ex)
-            {
-                LogIoWarning(ex, ex.Message);
-
-                if (attempt == 2)
-                {
-                    throw new InvalidOperationException("Failed to read from local file after exhausting all retries.", ex);
-                }
-            }
+            return 0;
         }
 
-        return 0;
+        int bytesRead = InputOutputRetryPolicy.Execute(
+            3,
+            buffer,
+            (_, buf) => RandomAccess.Read(_fileHandle, buf, Position),
+            ex => ex is IOException,
+            (ex, _) => LogIoWarning(ex, ex.Message),
+            (_, attempt) => attempt == 2,
+            ex => new InvalidOperationException("Failed to read from local file after exhausting all retries.", ex));
+
+        Position += bytesRead;
+        LogBuffering(Position.ToFormattedBytes(), Length.ToFormattedBytes());
+        return bytesRead;
     }
 
     /// <summary>

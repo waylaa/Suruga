@@ -4,7 +4,7 @@
 /// Provides a base class for read-only byte-level audio streams that support
 /// seeking and position tracking.
 /// </summary>
-public abstract class ReadOnlyAudioByteStream : Stream
+internal abstract class ReadOnlyAudioByteStream : Stream
 {
     /// <summary>
     /// Gets a value indicating whether the current stream supports reading.

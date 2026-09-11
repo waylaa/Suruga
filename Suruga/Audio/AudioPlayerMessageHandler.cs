@@ -30,42 +30,31 @@ internal sealed class AudioPlayerMessageHandler
     {
         if (_boundMessage is null)
         {
-            // Do not respond on an invalidated player message. This should generally not happen.
+            return;
+        }
+
+        PlayerMessagePresenter.Presentation presentation = PlayerMessagePresenter.Resolve(state, track, error);
+
+        if (!presentation.ShouldUpdate)
+        {
             return;
         }
 
         try
         {
-            switch (state)
+            await _boundMessage.ModifyAsync(options =>
             {
-                case AudioPlayerState.Playing when track is not null:
-                    await _boundMessage.ModifyAsync(options => options
-                        .WithEmbeds([EmbedHelper.NowPlaying(track)])
-                        .WithComponents([ComponentsHelper.CreatePlayerControlsComponent(false)]));
-                    break;
-				
-                case AudioPlayerState.Paused when track is not null:
-                    await _boundMessage.ModifyAsync(options => options
-                        .WithEmbeds([EmbedHelper.Paused(track)])
-                        .WithComponents([ComponentsHelper.CreatePlayerControlsComponent(true)]));
-                    break;
-				
-                case AudioPlayerState.Idle when track is not null && error is not null:
-                    await _boundMessage.ModifyAsync(options => options
-                        .WithEmbeds([EmbedHelper.Errored(track)])
-                        .WithComponents([]));
-                    break;
-				
-                case AudioPlayerState.Idle:
-                    await _boundMessage.ModifyAsync(options => options.WithComponents([]));
-                    break;
-				
-                default: return;
-            }
+                options.WithComponents(presentation.Components);
+
+                if (presentation.Embed is not null)
+                {
+                    options.WithEmbeds([presentation.Embed]);
+                }
+            });
         }
         catch (RestException ex) when (ex.StatusCode is HttpStatusCode.NotFound)
         {
-            _boundMessage = null; // A user deleted the player message, invalidate.
+            _boundMessage = null;
         }
     }
 

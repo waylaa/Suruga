@@ -15,12 +15,8 @@ using Suruga.Resolvers;
 
 namespace Suruga.Commands;
 
-internal sealed class AudioCommandsModule
-(
-    TrackResolverRouter router,
-    AudioSessionManager sessionManager,
-    PaginatorManager paginatorManager
-) : ApplicationCommandModule<ApplicationCommandContext>
+internal sealed class AudioCommandsModule (TrackResolverRouter router, AudioSessionManager sessionManager, PaginatorManager paginatorManager )
+    : ApplicationCommandModule<ApplicationCommandContext>
 {
     [SlashCommand("play", "Attempts to play a track or URL.", Contexts = [InteractionContextType.Guild])]
     public async Task PlayAsync([SlashCommandParameter(AutocompleteProviderType = typeof(TrackResultsAutocompleteProvider))] string query)
@@ -40,7 +36,7 @@ internal sealed class AudioCommandsModule
             return;
         }
         
-        AudioSession session = sessionManager.GetOrCreateSession(guild.Id, Context.Channel.Id);
+        AudioSession session = sessionManager.GetOrCreateSession(guild.Id);
         ulong? boundChannelId = session.PlayerMessage.BoundChannelId;
         
         if (Context.Channel.Id != boundChannelId && boundChannelId is ulong channelId)
@@ -193,7 +189,7 @@ internal sealed class AudioCommandsModule
         await RespondAsync(InteractionCallback.DeferredMessage());
 
         ulong voiceChannelId = userVoiceState.ChannelId.GetValueOrDefault();
-        AudioSession session = sessionManager.GetOrCreateSession(guild.Id, Context.Channel.Id);
+        AudioSession session = sessionManager.GetOrCreateSession(guild.Id);
         AudioConnection connection = session.Connection;
         AudioPlayer player = session.Player;
         

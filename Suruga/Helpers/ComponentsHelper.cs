@@ -37,8 +37,7 @@ internal static class ComponentsHelper
 		(
 			new ButtonProperties("player_loop_toggle", "↻", ButtonStyle.Secondary),
 			new ButtonProperties("player_back", "⏮", ButtonStyle.Secondary),
-			new ButtonProperties(isPaused ? "player_resume" : "player_pause", isPaused ? "▶" : "⏸", isPaused
-				? ButtonStyle.Success : ButtonStyle.Primary),
+			new ButtonProperties(isPaused ? "player_resume" : "player_pause", isPaused ? "▶" : "⏸", isPaused ? ButtonStyle.Success : ButtonStyle.Primary),
 			new ButtonProperties("player_skip", "⏭", ButtonStyle.Secondary),
 			new ButtonProperties("player_stop", "⏹", ButtonStyle.Danger)
 		);

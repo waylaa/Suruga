@@ -13,11 +13,8 @@ namespace Suruga.Handlers;
 /// <remarks>
 /// This handler reacts only to voice state changes for the bot itself.
 /// </remarks>
-internal sealed class AutoPauseResumeVoiceStateUpdateGatewayHandler
-(
-	GatewayClient gatewayClient,
-	AudioSessionManager sessionManager
-) : IVoiceStateUpdateGatewayHandler
+internal sealed class AutoPauseResumeVoiceStateUpdateGatewayHandler(GatewayClient gatewayClient, AudioSessionManager sessionManager)
+	: IVoiceStateUpdateGatewayHandler
 {
     /// <summary>
     /// Processes a voice state update event.
