@@ -9,27 +9,13 @@
     env_file:
       - .env
     environment:
-      BOT_FFMPEGPATH: /opt/ffmpeg/lib
-      DATABASE_CONNECTIONSTRING: mongodb://mongodb:27017
+      DATABASE_PATH: /app/data/suruga.db
       INVIDIOUSCOMPANION_HOST: invidious-companion
+    volumes:
+      - suruga-data:/app/data
     depends_on:
-      mongodb:
-        condition: service_healthy
       invidious-companion:
         condition: service_started
-
-  mongodb:
-    image: mongo:7-jammy
-    container_name: suruga-mongodb
-    restart: unless-stopped
-    volumes:
-      - mongodb-data:/data/db
-    healthcheck:
-      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 20s
 
   invidious-companion:
     image: quay.io/invidious/invidious-companion:latest
@@ -41,5 +27,5 @@
       - invidious_companion-cache:/var/tmp/youtubei.js
 
 volumes:
-  mongodb-data:
+  suruga-data:
   invidious_companion-cache:
