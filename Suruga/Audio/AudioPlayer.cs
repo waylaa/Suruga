@@ -188,16 +188,17 @@ internal sealed class AudioPlayer
 
     internal Task<CommandResult> SeekAsync(TimeSpan timestamp)
     {
-        return RunCommandAsync(() =>
+        return RunCommandAsync(async () =>
         {
-            if (State is AudioPlayerState.Idle)
+            if (State is AudioPlayerState.Idle || _activeDecoder?.TrySeek(timestamp) != true)
             {
-                return Task.FromResult(new CommandResult(CommandStatus.NothingToSeek));
+                return new CommandResult(CommandStatus.NothingToSeek);
             }
+
+            _postProcessor.Reset();
+            await sink.FlushAsync();
             
-            return _activeDecoder?.TrySeek(timestamp) == true
-                ? Task.FromResult(new CommandResult(CommandStatus.Success))
-                : Task.FromResult(new CommandResult(CommandStatus.NothingToSeek));
+            return new CommandResult(CommandStatus.Success);
         });
     }
 
