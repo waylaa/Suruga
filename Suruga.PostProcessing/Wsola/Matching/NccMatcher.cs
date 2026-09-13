@@ -6,7 +6,7 @@ namespace Suruga.PostProcessing.Wsola.Matching;
 internal static class NccMatcher
 {
     private const int CoarseStride = 4;
-    private const float MinimumConfidence = 0.15f;
+    private const float MinimumConfidence = 0.4f;
 
     internal static WsolaCandidate FindBest
     (
@@ -130,7 +130,7 @@ internal static class NccMatcher
         ReadOnlySpan<float> candidate = input.Slice(sampleOffset, length);
 
         float dot = TensorPrimitives.Dot(reference, candidate);
-        float candidateEnergy = prefixEnergy[sampleOffset + length] - prefixEnergy[sampleOffset];
+        float candidateEnergy = MathF.Max(0, prefixEnergy[sampleOffset + length] - prefixEnergy[sampleOffset]);
         float denominator = MathF.Sqrt(referenceEnergy * candidateEnergy);
 
         return denominator > 1e-12f ? dot / denominator : 0;
