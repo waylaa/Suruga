@@ -1,6 +1,6 @@
 ﻿namespace Suruga.PostProcessing.Wsola.Matching;
 
-internal readonly struct WsolaCandidate
+internal readonly record struct WsolaCandidate
 {
     internal int InputPosition { get; }
 
