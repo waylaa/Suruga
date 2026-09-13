@@ -12,26 +12,12 @@ internal sealed class TrackQueue
         {
             using (_lock.EnterScope())
             {
-                if (_currentNode is null)
-                {
-                    return _tracks.ToList().AsReadOnly();
-                }
-
-                if (_isPastEnd)
+                if (_currentIndex < 0 || _isPastEnd)
                 {
                     return [];
                 }
 
-                List<Track> nextTracks = [];
-                LinkedListNode<Track>? node = _currentNode.Next;
-
-                while (node is not null)
-                {
-                    nextTracks.Add(node.Value);
-                    node = node.Next;
-                }
-
-                return nextTracks;
+                return _tracks.GetRange(_currentIndex + 1, _tracks.Count - _currentIndex - 1);
             }
         }
     }
@@ -42,22 +28,19 @@ internal sealed class TrackQueue
         {
             using (_lock.EnterScope())
             {
-                if (_currentNode is null)
+                if (_currentIndex < 0)
                 {
-                    return [];
+                    return _history.AsReadOnly();
                 }
 
-                List<Track> previousTracks = [];
+                // While past the end, the last track is history too; otherwise
+                // everything strictly before the current index is history.
+                int exclusiveEnd = _isPastEnd ? _currentIndex + 1 : _currentIndex;
 
-                // When past the end of the queue, the last node itself is history too.
-                LinkedListNode<Track>? node = _isPastEnd ? _currentNode : _currentNode.Previous;
+                List<Track> previousTracks = new(_history.Count + exclusiveEnd);
+                previousTracks.AddRange(_history);
+                previousTracks.AddRange(_tracks.GetRange(0, exclusiveEnd));
 
-                while (node is not null)
-                {
-                    previousTracks.Insert(0, node.Value);
-                    node = node.Previous;
-                }
-                
                 return previousTracks;
             }
         }
@@ -69,7 +52,14 @@ internal sealed class TrackQueue
         {
             using (_lock.EnterScope())
             {
-                return !_isPastEnd && _currentNode?.Next is not null;
+                if (_currentIndex < 0 || _isPastEnd)
+                {
+                    return false;
+                }
+
+                // Track/Queue loop modes always have a "next" - either the same
+                // track again or a wrap back to the start.
+                return LoopMode is LoopMode.Track or LoopMode.Queue || _currentIndex < _tracks.Count - 1;
             }
         }
     }
@@ -80,7 +70,12 @@ internal sealed class TrackQueue
         {
             using (_lock.EnterScope())
             {
-                return _isPastEnd ? _currentNode is not null : _currentNode?.Previous is not null;
+                if (_history.Count > 0)
+                {
+                    return true;
+                }
+
+                return _isPastEnd ? _currentIndex >= 0 : _currentIndex > 0;
             }
         }
     }
@@ -91,7 +86,7 @@ internal sealed class TrackQueue
         {
             using (_lock.EnterScope())
             {
-                return _isPastEnd ? null : _currentNode?.Value;
+                return _isPastEnd || _currentIndex < 0 ? null : _tracks[_currentIndex];
             }
         }
     }
@@ -114,48 +109,60 @@ internal sealed class TrackQueue
         }
     } = LoopMode.None;
 
-    private readonly LinkedList<Track> _tracks = [];
+    private readonly List<Track> _tracks = [];
+
+    // Tracks from laps that have already fully completed under LoopMode.Queue.
+    // _tracks/_currentIndex only cover the current lap, since looping restarts
+    // the same list.
+    private readonly List<Track> _history = [];
+
     private readonly Lock _lock = new();
 
-    private LinkedListNode<Track>? _currentNode;
+    // Index of the current track within _tracks, or -1 if the queue is empty.
+    private int _currentIndex = -1;
 
-    // True once playback has run past the last item in a non-looping queue.
-    // _currentNode is kept pointing at the last-played node so that
-    // Previous/HasPreviousTrack can still report history.
+    // True once playback has advanced past the last track in a non-looping queue.
+    // _currentIndex is left pointing at the last track rather than being reset
+    // so Previous/HasPreviousTrack can still report it as history.
     private bool _isPastEnd;
+    
+    private const int MaxHistorySize = 100;
+    private const int MaxSnapshotSize = 100;
 
     internal TrackQueue(TrackQueueSnapshot? snapshot)
     {
-        if (snapshot is null ||snapshot.Tracks.Count == 0)
+        if (snapshot is null || snapshot.Tracks.Count == 0)
         {
             return;
         }
-        
+
         LoopMode = snapshot.LoopMode;
-        int index = 0;
-        
-        foreach (Track track in snapshot.Tracks)
-        {
-            LinkedListNode<Track> node = _tracks.AddLast(track);
+        _tracks.AddRange(snapshot.Tracks);
 
-            if (index == snapshot.CurrentTrackIndex)
-            {
-                _currentNode = node;
-            }
-
-            index++;
-        }
-        
-        // If index is ever out of bounds, default to the first item.
-        _currentNode ??= _tracks.First;
+        // If the index is ever out of bounds, default to the first item.
+        _currentIndex = snapshot.CurrentTrackIndex >= 0 && snapshot.CurrentTrackIndex < _tracks.Count
+            ? snapshot.CurrentTrackIndex
+            : 0;
     }
-    
+
     internal void Add(Track track)
     {
         using (_lock.EnterScope())
         {
-            _tracks.AddLast(track);
-            _currentNode ??= _tracks.First;
+            _tracks.Add(track);
+
+            if (_currentIndex < 0)
+            {
+                _currentIndex = 0;
+            }
+            else if (_isPastEnd)
+            {
+                // Playback had already finished with _currentIndex left on the
+                // last-played track. Advance to the newly queued track instead
+                // of resuming by replaying that finished one.
+                _currentIndex = _tracks.Count - 1;
+            }
+
             _isPastEnd = false;
         }
     }
@@ -164,7 +171,7 @@ internal sealed class TrackQueue
     {
         using (_lock.EnterScope())
         {
-            if (_currentNode is null)
+            if (_currentIndex < 0)
             {
                 track = null;
                 return false;
@@ -173,33 +180,41 @@ internal sealed class TrackQueue
             if (LoopMode is LoopMode.Track)
             {
                 _isPastEnd = false;
-                track = _currentNode.Value;
+                track = _tracks[_currentIndex];
                 return true;
             }
-            
-            LinkedListNode<Track>? nextNode = _currentNode.Next;
 
-            // Wrap around to the first item if at the end and queue looping.
-            if (nextNode is null && LoopMode is LoopMode.Queue)
-            {
-                nextNode = _tracks.First;
-            }
+            int nextIndex = _currentIndex + 1;
 
-            if (nextNode is not null)
+            if (nextIndex >= _tracks.Count)
             {
-                _currentNode = nextNode;
-                _isPastEnd = false;
-                track = nextNode.Value;
+                if (LoopMode is not LoopMode.Queue)
+                {
+                    // Leave _currentIndex on the last-played track so the
+                    // completed track still shows up in Previous/history.
+                    _isPastEnd = true;
+                    track = null;
+                    return false;
+                }
+
+                // The whole current lap is about to be replayed from the top,
+                // archive it as permanent history first so Previous/Next don't
+                // reset on wrap.
+                _history.AddRange(_tracks);
                 
-                return true;
+                if (_history.Count > MaxHistorySize)
+                {
+                    _history.RemoveRange(0, _history.Count - MaxHistorySize);
+                }
+
+                nextIndex = 0;
             }
 
-            // Keep _currentNode on the last-played node so the completed track
-            // still shows up in Previous/history instead of vanishing.
-            _isPastEnd = true;
-            track = null;
-            
-            return false;
+            _currentIndex = nextIndex;
+            _isPastEnd = false;
+            track = _tracks[nextIndex];
+
+            return true;
         }
     }
 
@@ -207,21 +222,47 @@ internal sealed class TrackQueue
     {
         using (_lock.EnterScope())
         {
-            LinkedListNode<Track>? targetNode = _isPastEnd
-                ? _currentNode
-                : _currentNode is null ? _tracks.Last : _currentNode.Previous;
-            
-            if (targetNode is null)
+            if (_tracks.Count == 0)
             {
                 track = null;
                 return false;
             }
-            
-            _currentNode = targetNode;
-            _isPastEnd = false;
-            track = targetNode.Value;
-            
-            return true;
+
+            if (_isPastEnd)
+            {
+                _isPastEnd = false;
+                track = _tracks[_currentIndex];
+                return true;
+            }
+
+            if (_currentIndex > 0)
+            {
+                _currentIndex--;
+                track = _tracks[_currentIndex];
+                return true;
+            }
+
+            // Rewinding off the front of the current lap, restore the last track
+            // from the previous lap.
+            if (_currentIndex == 0 && _history.Count > 0)
+            {
+                Track restoredTrack = _history[^1];
+                _history.RemoveAt(_history.Count - 1);
+
+                // The restored track is already the last track in _tracks because
+                // the previous lap was copied into _history when it wrapped.
+                // Move it from the end to the beginning instead of inserting a duplicate.
+                _tracks.RemoveAt(_tracks.Count - 1);
+                _tracks.Insert(0, restoredTrack);
+
+                _currentIndex = 0;
+                track = restoredTrack;
+
+                return true;
+            }
+
+            track = null;
+            return false;
         }
     }
 
@@ -229,43 +270,20 @@ internal sealed class TrackQueue
     {
         using (_lock.EnterScope())
         {
-            LinkedListNode<Track>? startNode = _currentNode?.Next ?? _tracks.First;
+            int startIndex = _currentIndex < 0 ? 0 : _currentIndex + 1;
+            int remainingCount = _tracks.Count - startIndex;
 
-            // Cannot shuffle with less than 2 items.
-            if (startNode?.Next is null)
+            // Cannot shuffle with less than 2 upcoming items.
+            if (remainingCount < 2)
             {
                 return false;
             }
 
-            List<Track> remaining = [];
-            LinkedListNode<Track>? current = startNode;
-
-            while (current is not null)
-            {
-                remaining.Add(current.Value);
-                current = current.Next;
-            }
-            
-            // Fisher-Yates shuffle.
-            for (int i = remaining.Count - 1; i > 0; i--)
+            // Fisher-Yates shuffle over the upcoming tracks only.
+            for (int i = remainingCount - 1; i > 0; i--)
             {
                 int j = Random.Shared.Next(i + 1);
-                (remaining[i], remaining[j]) = (remaining[j], remaining[i]);
-            }
-            
-            // Remove old remaining nodes.
-            while (startNode is not null)
-            {
-                LinkedListNode<Track>? next = startNode.Next;
-                _tracks.Remove(startNode);
-                
-                startNode = next;
-            }
-            
-            // Add the shuffled items back to the queue.
-            foreach (Track track in remaining)
-            {
-                _tracks.AddLast(track);
+                (_tracks[startIndex + i], _tracks[startIndex + j]) = (_tracks[startIndex + j], _tracks[startIndex + i]);
             }
 
             return true;
@@ -276,26 +294,14 @@ internal sealed class TrackQueue
     {
         using (_lock.EnterScope())
         {
-            LinkedListNode<Track>? node = _tracks.First;
-            List<Track> snapshotTracks = [];
-            int currentIndex = -1;
+            int count = Math.Min(_tracks.Count, MaxSnapshotSize);
+            List<Track> snapshotTracks = _tracks.GetRange(0, count);
 
-            // Capture max 100 items starting from the top.
-            while (node is not null && snapshotTracks.Count < 100)
-            {
-                if (node == _currentNode)
-                {
-                    currentIndex = snapshotTracks.Count;
-                }
-
-                snapshotTracks.Add(node.Value);
-                node = node.Next;
-            }
-            
+            int currentIndex = _currentIndex >= 0 && _currentIndex < count ? _currentIndex : -1;
             return new TrackQueueSnapshot(snapshotTracks.AsReadOnly(), currentIndex, LoopMode);
         }
     }
-    
+
     internal bool Clear()
     {
         using (_lock.EnterScope())
@@ -306,8 +312,8 @@ internal sealed class TrackQueue
             }
 
             // Keep the currently playing track (if any) so it still shows up as
-            // "now playing" afterward. Only the rest of the queue gets wiped.
-            Track? currentTrack = !_isPastEnd ? _currentNode?.Value : null;
+            // 'now playing' afterward. The rest of the queue gets wiped.
+            Track? currentTrack = !_isPastEnd && _currentIndex >= 0 ? _tracks[_currentIndex] : null;
 
             // Nothing to clear if the only track left is the one currently playing.
             if (currentTrack is not null && _tracks.Count <= 1)
@@ -316,10 +322,19 @@ internal sealed class TrackQueue
             }
 
             _tracks.Clear();
-            
-            _currentNode = currentTrack is null ? null : _tracks.AddLast(currentTrack);
+            _history.Clear();
             _isPastEnd = false;
-            
+
+            if (currentTrack is not null)
+            {
+                _tracks.Add(currentTrack);
+                _currentIndex = 0;
+            }
+            else
+            {
+                _currentIndex = -1;
+            }
+
             return true;
         }
     }
