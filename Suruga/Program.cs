@@ -127,11 +127,12 @@ internal sealed class Program
 
         services
             .AddMemoryCache()
+            .AddHostedService<LoggerInitializationService>()
             .AddHostedService<FFmpegLoaderService>()
-            .AddActivatedSingleton(sp => FFmpegLogger.Initialize(sp.GetRequiredService<ILogger<FFmpegLogger>>(), IsDevelopmentBuild))
+            .AddActivatedSingleton(_ => FFmpegLogger.Initialize(IsDevelopmentBuild))
             .AddSingleton<DatabaseClient>()
-            .AddSingleton<PersistenceAvailability>()
-            .AddSingleton<TrackQueueStateRepository>()
+            .AddSingleton<SqliteOperationExecutor>()
+            .AddSingleton<TrackQueueRepository>()
             .AddHttpClient("youtube-bytestream").AddStandardResilienceHandler(CreateHttpResiliencePipeline).Services
             .AddHttpClient<InvidiousCompanionClient>().AddStandardResilienceHandler(CreateHttpResiliencePipeline).Services
             .AddHttpClient<YoutubeAndroidClient>().AddStandardResilienceHandler(CreateHttpResiliencePipeline).Services
