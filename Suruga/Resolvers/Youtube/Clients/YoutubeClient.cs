@@ -6,8 +6,8 @@ namespace Suruga.Resolvers.Youtube.Clients;
 
 internal abstract class YoutubeClient(HttpClient client, InnertubeClientProfile profile)
 {
-    private readonly InnertubeRequestExecutor _executor = new(client);
-    
+    private readonly InnertubeApiClient _apiClient = new(client);
+
     private string? _visitorData;
 
     internal abstract Task<Result<JsonDocument>> GetDynamicPlaylistAsync
@@ -18,17 +18,15 @@ internal abstract class YoutubeClient(HttpClient client, InnertubeClientProfile 
         string? continuationToken,
         CancellationToken token = default
     );
-    
+
     internal abstract Task<Result<JsonDocument>> GetPlaylistAsync(string playlistId, string? continuationToken, CancellationToken token = default);
-    
+
     internal abstract Task<Result<JsonDocument>> SearchAsync(string query, CancellationToken token = default);
 
     protected async Task<Result<JsonDocument>> ExecuteAsync(string url, JsonObject bodyWithoutContext, CancellationToken token)
     {
         string visitorData = await GetVisitorDataAsync(token);
-        bodyWithoutContext["context"] = InnertubeContextBuilder.Build(profile, visitorData);
-
-        return await _executor.PostAsync(url, profile, visitorData, bodyWithoutContext, token);
+        return await _apiClient.PostAsync(url, profile, visitorData, bodyWithoutContext, token);
     }
 
     private async Task<string> GetVisitorDataAsync(CancellationToken token = default)

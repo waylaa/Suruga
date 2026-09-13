@@ -12,7 +12,7 @@ internal sealed class InvidiousCompanionClient(HttpClient client, IOptions<Invid
 {
     private readonly InvidiousCompanionOptions _options = options.Value;
 
-    internal Task<Result<JsonDocument>> GetPlayerAsync(string videoId, CancellationToken token)
+    internal async Task<Result<JsonDocument>> GetPlayerAsync(string videoId, CancellationToken token)
     {
         string protocol = _options.UseHttps ? "https" : "http";
         string url = $"{protocol}://{_options.Host}:{_options.Port}/companion/youtubei/v1/player";
@@ -21,6 +21,6 @@ internal sealed class InvidiousCompanionClient(HttpClient client, IOptions<Invid
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _options.SecretKey);
         request.Content = new StringContent(new JsonObject { ["videoId"] = videoId }.ToJsonString(), Encoding.UTF8, "application/json");
 
-        return HttpJsonDocumentReader.SendAsync(client, request, token);
+        return await HttpJsonDocumentReader.SendAsync(client, request, token);
     }
 }
