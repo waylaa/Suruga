@@ -17,17 +17,10 @@ internal sealed class PaginatorSession<T> : IPaginatorSession
     internal Paginator<T> Paginator { get; }
 
 	private readonly CancellationTokenSource _cancellation = new();
-
-    /// <summary>
-    /// Initializes a new paginator session.
-    /// </summary>
-    /// <param name="paginator">The paginator to associate with the session.</param>
+	
     internal PaginatorSession(Paginator<T> paginator)
 		=> Paginator = paginator;
-
-    /// <summary>
-    /// Cancels the session and releases associated resources.
-    /// </summary>
+    
     public async ValueTask DisposeAsync()
 	{
 		if (!_cancellation.IsCancellationRequested)

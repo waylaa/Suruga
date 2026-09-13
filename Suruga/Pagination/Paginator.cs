@@ -10,15 +10,9 @@ internal sealed class Paginator<T>
     /// Gets the total number of available pages.
     /// </summary>
     internal int TotalPages => Math.Max(1, (int)Math.Ceiling(_items.Count / (double)_pageSize));
-
-    /// <summary>
-    /// Gets whether the current page is the first page.
-    /// </summary>
+	
     internal bool IsAtFirstPage => CurrentPage == 0;
-
-    /// <summary>
-    /// Gets whether the current page is the last page.
-    /// </summary>
+	
     internal bool IsAtLastPage => CurrentPage >= TotalPages - 1;
 
     /// <summary>
@@ -28,12 +22,7 @@ internal sealed class Paginator<T>
 	
 	private readonly IReadOnlyList<T> _items;
 	private readonly int _pageSize;
-
-    /// <summary>
-    /// Initializes a new paginator instance.
-    /// </summary>
-    /// <param name="items">The items to paginate.</param>
-    /// <param name="pageSize">The number of items per page.</param>
+	
     internal Paginator(IReadOnlyList<T> items, int pageSize)
 	{
 		_items = items;
