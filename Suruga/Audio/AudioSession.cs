@@ -1,7 +1,7 @@
-﻿using Microsoft.Extensions.Logging;
-using NetCord.Gateway;
+﻿using NetCord.Gateway;
 using NetCord.Logging;
 using Suruga.Audio.Primitives;
+using Suruga.Common;
 using Suruga.Persistence;
 using Suruga.Primitives;
 using Suruga.Resolvers;
@@ -15,8 +15,10 @@ internal sealed class AudioSession : IAsyncDisposable
     
     internal AudioPlayer Player { get; }
 
-    internal AudioPlayerMessageHandler PlayerMessage { get; }
+    internal AudioPlayerMessage PlayerMessage { get; }
 
+    private readonly ulong _guildId;
+    
     private bool _isDisposed;
 
     internal AudioSession
@@ -24,21 +26,22 @@ internal sealed class AudioSession : IAsyncDisposable
         GatewayClient gatewayClient,
         TrackStreamResolverRouter trackStreamResolverRouter,
         ReadOnlyAudioByteStreamFactory byteStreamFactory,
-        TrackQueueStateRepository repository,
+        TrackQueueRepository repository,
         IVoiceLogger voiceLogger,
-        ILoggerFactory loggerFactory,
         ulong guildId
     )
     {
+        _guildId = guildId;
+        
         Connection = new AudioConnection(gatewayClient, voiceLogger, guildId);
-        Player = new AudioPlayer(trackStreamResolverRouter, byteStreamFactory, repository, Connection.Sink, loggerFactory, guildId);
-        PlayerMessage = new AudioPlayerMessageHandler();
+        Player = new AudioPlayer(trackStreamResolverRouter, byteStreamFactory, repository, Connection.Sink, guildId);
+        PlayerMessage = new AudioPlayerMessage();
 
         Player.PlayerStateChanged += OnPlayerStateChangedAsync;
     }
     
-    private Task OnPlayerStateChangedAsync(AudioPlayerState state, Track? track, Exception? error)
-        => PlayerMessage.UpdateAsync(state, track, error);
+    private Task OnPlayerStateChangedAsync(AudioPlayerState state, Track? track = null, Exception? error = null)
+        => PlayerMessage.RefreshAsync(state, track, error);
 
     public async ValueTask DisposeAsync()
     {
@@ -49,8 +52,11 @@ internal sealed class AudioSession : IAsyncDisposable
         
         _isDisposed = true;
         
+        Logger.Debug<AudioSession>($"Disposing audio session in Guild {_guildId}");
+        
         Player.PlayerStateChanged -= OnPlayerStateChangedAsync;
-        await Connection.DisposeAsync();
+        
         await Player.DisposeAsync();
+        await Connection.DisposeAsync();
     }
 }

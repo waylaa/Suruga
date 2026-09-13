@@ -9,14 +9,11 @@ using Suruga.Helpers;
 using Suruga.Pagination;
 using Suruga.Primitives;
 using System.Globalization;
-using Suruga.Audio.Commands.Connection;
-using Suruga.Audio.Commands.Playback;
 using Suruga.Resolvers;
 
 namespace Suruga.Commands;
 
-internal sealed class AudioCommandsModule (TrackResolverRouter router, AudioSessionManager sessionManager, PaginatorManager paginatorManager )
-    : ApplicationCommandModule<ApplicationCommandContext>
+internal sealed class AudioCommandsModule(TrackResolverRouter router, AudioSessionManager sessionManager, PaginatorManager paginatorManager ) : ApplicationCommandModule<ApplicationCommandContext>
 {
     [SlashCommand("play", "Attempts to play a track or URL.", Contexts = [InteractionContextType.Guild])]
     public async Task PlayAsync([SlashCommandParameter(AutocompleteProviderType = typeof(TrackResultsAutocompleteProvider))] string query)
@@ -65,7 +62,7 @@ internal sealed class AudioCommandsModule (TrackResolverRouter router, AudioSess
         AudioConnection connection = session.Connection;
         AudioPlayer player = session.Player;
 
-        CommandResult connectionResult = await connection.PostAsync(new ConnectCommand(voiceChannelId));
+        CommandResult connectionResult = await connection.ConnectAsync(voiceChannelId);
 
         if (connectionResult.Status is CommandStatus.InvalidVoice)
         {
@@ -77,10 +74,10 @@ internal sealed class AudioCommandsModule (TrackResolverRouter router, AudioSess
         
         if (!session.PlayerMessage.HasMessage || (session.PlayerMessage.HasMessage && player.State is AudioPlayerState.Idle))
         {
-            await session.PlayerMessage.SetAsync(Context.Interaction, player.State);
+            await session.PlayerMessage.BindAsync(Context.Interaction, player.State);
         }
         
-        CommandResult playerResult = await player.PostAsync(new PlayAudioCommand(set));
+        CommandResult playerResult = await player.PlayAsync(set);
 
         if (playerResult.Status is CommandStatus.NoTracks)
         {
@@ -88,7 +85,7 @@ internal sealed class AudioCommandsModule (TrackResolverRouter router, AudioSess
             return;
         }
 
-        if (session.PlayerMessage.HasMessage && player.Queue.HasNext && wasNotIdle)
+        if (session.PlayerMessage.HasMessage && player.Queue.HasNextTrack && wasNotIdle)
         {
             await FollowupAsync(set.Count > 1 ? $"Queued {set.Count} tracks." : "Queued 1 track.");
         }
@@ -115,14 +112,8 @@ internal sealed class AudioCommandsModule (TrackResolverRouter router, AudioSess
             return;
         }
         
-        AudioConnection connection = session.Connection;
-        await connection.PostAsync(new DisconnectCommand());
-
-        AudioPlayer player = session.Player;
-        await player.PostAsync(new StopAudioCommand());
-        
-        await session.DisposeAsync();
         await FollowupAsync($"Left {voiceChannelName}.");
+        await session.DisposeAsync();
     }
 
     [SlashCommand("stop", "Stops current track.", Contexts = [InteractionContextType.Guild])]
@@ -134,7 +125,7 @@ internal sealed class AudioCommandsModule (TrackResolverRouter router, AudioSess
         }
         
         await RespondAsync(InteractionCallback.DeferredMessage());
-        CommandResult result = await session.Player.PostAsync(new StopAudioCommand());
+        CommandResult result = await session.Player.StopAsync();
 
         switch (result.Status)
         {
@@ -157,7 +148,7 @@ internal sealed class AudioCommandsModule (TrackResolverRouter router, AudioSess
         }
         
         await RespondAsync(InteractionCallback.DeferredMessage());
-        CommandResult result = await session.Player.PostAsync(new PauseAudioCommand());
+        CommandResult result = await session.Player.PauseAsync();
 
         switch (result.Status)
         {
@@ -192,10 +183,16 @@ internal sealed class AudioCommandsModule (TrackResolverRouter router, AudioSess
         AudioSession session = sessionManager.GetOrCreateSession(guild.Id);
         AudioConnection connection = session.Connection;
         AudioPlayer player = session.Player;
-        
-        CommandResult connectionResult = await connection.PostAsync(new ConnectCommand(voiceChannelId));
 
-        if (connectionResult.Status is CommandStatus.InvalidVoice)
+        if (player.State is AudioPlayerState.Idle && player.CurrentTrack is null)
+        {
+            await FollowupAsync("There is nothing to resume.");
+            return;
+        }
+        
+        CommandResult connectionResult = await connection.ConnectAsync(voiceChannelId);
+
+        if (connectionResult.Status is CommandStatus.InvalidVoice or CommandStatus.Undefined)
         {
             await FollowupAsync("Failed to connect to voice channel.");
             return;
@@ -205,25 +202,29 @@ internal sealed class AudioCommandsModule (TrackResolverRouter router, AudioSess
         {
             if (!session.PlayerMessage.HasMessage || (session.PlayerMessage.HasMessage && player.State is AudioPlayerState.Idle))
             {
-                await session.PlayerMessage.SetAsync(Context.Interaction, player.State);
+                await session.PlayerMessage.BindAsync(Context.Interaction, player.State);
             }
+
+            await player.ResumeAsync();
         }
-
-        CommandResult result = await player.PostAsync(new ResumeAudioCommand());
-
-        switch (result.Status)
+        else
         {
-            case CommandStatus.Success:
-                await FollowupAsync("Playback resumed.");
-                break;
+            CommandResult result = await player.ResumeAsync();
+
+            switch (result.Status)
+            {
+                case CommandStatus.Success:
+                    await FollowupAsync("Playback resumed.");
+                    break;
             
-            case CommandStatus.AlreadyPlaying:
-                await FollowupAsync("I am already resumed.");
-                break;
+                case CommandStatus.AlreadyPlaying:
+                    await FollowupAsync("I am already resumed.");
+                    break;
             
-            case CommandStatus.NothingToResume:
-                await FollowupAsync("There is nothing to resume.");
-                break;
+                case CommandStatus.NothingToResume:
+                    await FollowupAsync("There is nothing to resume.");
+                    break;
+            }
         }
     }
     
@@ -236,7 +237,7 @@ internal sealed class AudioCommandsModule (TrackResolverRouter router, AudioSess
         }
         
         await RespondAsync(InteractionCallback.DeferredMessage());
-        CommandResult result = await session.Player.PostAsync(new SkipAudioCommand());
+        CommandResult result = await session.Player.SkipAsync();
 
         if (result.Status is CommandStatus.NothingToSkip)
         {
@@ -257,7 +258,7 @@ internal sealed class AudioCommandsModule (TrackResolverRouter router, AudioSess
         }
 
         await RespondAsync(InteractionCallback.DeferredMessage());
-        CommandResult result = await session.Player.PostAsync(new RewindAudioCommand());
+        CommandResult result = await session.Player.RewindAsync();
 
         if (result.Status is CommandStatus.NothingToRewind)
         {
@@ -284,7 +285,7 @@ internal sealed class AudioCommandsModule (TrackResolverRouter router, AudioSess
         }
         
         await RespondAsync(InteractionCallback.DeferredMessage());
-        CommandResult result = await session.Player.PostAsync(new SeekAudioCommand(time));
+        CommandResult result = await session.Player.SeekAsync(time);
 
         switch (result.Status)
         {
@@ -312,7 +313,7 @@ internal sealed class AudioCommandsModule (TrackResolverRouter router, AudioSess
 
         await RespondAsync(InteractionCallback.DeferredMessage());
         
-        CommandResult result = await session.Player.PostAsync(new LoopAudioCommand(mode));
+        CommandResult result = await session.Player.LoopAsync(mode);
         await FollowupAsync($"Loop mode set to {result.Data}.");
     }
 
@@ -372,7 +373,7 @@ internal sealed class AudioCommandsModule (TrackResolverRouter router, AudioSess
         }
         
         await RespondAsync(InteractionCallback.DeferredMessage());
-        CommandResult result = await session.Player.PostAsync(new ShuffleAudioCommand());
+        CommandResult result = await session.Player.ShuffleAsync();
 
         if (result.Status is CommandStatus.NotEnoughTracksToShuffle)
         {
@@ -393,7 +394,7 @@ internal sealed class AudioCommandsModule (TrackResolverRouter router, AudioSess
         }
         
         await RespondAsync(InteractionCallback.DeferredMessage());
-        CommandResult result = await session.Player.PostAsync(new ClearAudioCommand());
+        CommandResult result = await session.Player.ClearAsync();
 
         if (result.Status is CommandStatus.NothingToClear)
         {
@@ -415,7 +416,7 @@ internal sealed class AudioCommandsModule (TrackResolverRouter router, AudioSess
         
         AudioPlayer player = session.Player;
 
-        if (!player.Queue.HasCurrent)
+        if (player.Queue.CurrentTrack is null)
         {
             await RespondAsync(InteractionCallback.Message("Nothing is currently playing."));
             return;
@@ -428,7 +429,7 @@ internal sealed class AudioCommandsModule (TrackResolverRouter router, AudioSess
             await session.PlayerMessage.InvalidateAsync();
         }
 
-        await session.PlayerMessage.SetAsync(Context.Interaction, player.State);
+        await session.PlayerMessage.BindAsync(Context.Interaction, player.State);
     }
     
     [SlashCommand("volume", "Set playback volume.", Contexts = [InteractionContextType.Guild])]
@@ -441,7 +442,7 @@ internal sealed class AudioCommandsModule (TrackResolverRouter router, AudioSess
 
         await RespondAsync(InteractionCallback.DeferredMessage());
         
-        await session.Player.PostAsync(new VolumeAudioCommand(value));
+        session.Player.SetVolume(value);
         await FollowupAsync($"Volume set to {value}%");
     }
 
@@ -455,7 +456,7 @@ internal sealed class AudioCommandsModule (TrackResolverRouter router, AudioSess
         
         await RespondAsync(InteractionCallback.DeferredMessage());
         
-        await session.Player.PostAsync(new SpeedAudioCommand(value));
+        session.Player.SetSpeed(value);
         await FollowupAsync($"Speed set to {value.ToString(CultureInfo.InvariantCulture)}x");
     }
 
@@ -469,7 +470,7 @@ internal sealed class AudioCommandsModule (TrackResolverRouter router, AudioSess
         
         await RespondAsync(InteractionCallback.DeferredMessage());
 
-        await session.Player.PostAsync(new PitchAudioCommand(value));
+        session.Player.SetPitch(value);
         await FollowupAsync($"Pitch set to {value.ToString(CultureInfo.InvariantCulture)}x");
     }
 
@@ -483,7 +484,7 @@ internal sealed class AudioCommandsModule (TrackResolverRouter router, AudioSess
         
         await RespondAsync(InteractionCallback.DeferredMessage());
         
-        await session.Player.PostAsync(new RateAudioCommand(value));
+        session.Player.SetRate(value);
         await FollowupAsync($"Rate set to {value.ToString(CultureInfo.InvariantCulture)}x");
     }
     

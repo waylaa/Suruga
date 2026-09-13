@@ -1,11 +1,8 @@
-﻿using System.Diagnostics.CodeAnalysis;
-using NetCord;
+﻿using NetCord;
 using NetCord.Rest;
 using NetCord.Services.ComponentInteractions;
 using Suruga.Audio;
-using Suruga.Audio.Commands.Playback;
 using Suruga.Audio.Primitives;
-using Suruga.Commands.Extensions;
 
 namespace Suruga.Commands.Interactions;
 
@@ -14,56 +11,62 @@ internal sealed class TrackInteractionModule(AudioSessionManager sessionManager)
     [ComponentInteraction("player_loop_toggle")]
     public async Task ToggleLoopOnCurrentTrack()
     {
-        if (!TryGetSession(out AudioSession? session))
+        if (!sessionManager.TryGetSession(Context.Guild!.Id, out AudioSession? session))
         {
             return;
         }
 
-        CommandResult result = await session.Player.PostAsync(new LoopAudioCommand(null));
+        CommandResult result = await session.Player.LoopAsync();
         await RespondEphemeralAsync($"Loop mode set to {result.Data}.");
     }
 
     [ComponentInteraction("player_pause")]
     public Task PauseCurrentTrack()
-        => ExecuteAsync(new PauseAudioCommand(), "Playback paused.");
+        => ExecuteAsync(async player => await player.PauseAsync(), "Playback paused.");
 
     [ComponentInteraction("player_resume")]
     public Task ResumeCurrentTrack()
-        => ExecuteAsync(new ResumeAudioCommand(), "Playback resumed.");
+        => ExecuteAsync(async player => await player.ResumeAsync(), "Playback resumed.");
+    
+    [ComponentInteraction("player_rewind")]
+    public Task RewindToPreviousTrack()
+        => ExecuteAsync(async player => await player.RewindAsync(), "Playback rewinding.");
 
     [ComponentInteraction("player_skip")]
     public Task SkipCurrentTrack()
-        => ExecuteAsync(new SkipAudioCommand(), "Track skipped.");
+        => ExecuteAsync(async player => await player.SkipAsync(), "Track skipped.");
 
     [ComponentInteraction("player_stop")]
     public Task StopCurrentTrack()
-        => ExecuteAsync(new StopAudioCommand(), "Playback stopped.");
+        => ExecuteAsync(async player => await player.StopAsync(), "Playback stopped.");
 
-    private async Task ExecuteAsync(PlaybackCommand command, string successMessage)
+    private async Task ExecuteAsync(Func<AudioPlayer, Task<CommandResult>> onExecute, string successMessage)
     {
-        if (!TryGetSession(out AudioSession? session))
+        if (!sessionManager.TryGetSession(Context.Guild!.Id, out AudioSession? session))
         {
+            await RespondAsync(InteractionCallback.Message(new InteractionMessageProperties()
+                .WithContent("I must be connected to a voice channel.")
+                .WithFlags(MessageFlags.Ephemeral)));
+
             return;
         }
 
-        CommandResult result = await session.Player.PostAsync(command);
-        string? message = result.Status is CommandStatus.Success ? successMessage : PlaybackCommandResponses.MessageFor(result.Status);
-
-        if (message is not null)
+        CommandResult result = await onExecute(session.Player);
+        
+        string response = result.Status switch
         {
-            await RespondEphemeralAsync(message);
-        }
-    }
-
-    private bool TryGetSession([NotNullWhen(true)] out AudioSession? session)
-    {
-        if (sessionManager.TryGetSession(Context.Guild!.Id, out session))
-        {
-            return true;
-        }
-
-        _ = RespondAsync(InteractionCallback.Message(new InteractionMessageProperties().NotInVoiceChannelMessage()));
-        return false;
+            CommandStatus.Success => successMessage,
+            CommandStatus.NothingToSkip => "There is nothing to skip.",
+            CommandStatus.NothingToRewind => "There is no previous track to rewind to.",
+            CommandStatus.NothingToPause => "There is nothing to pause.",
+            CommandStatus.AlreadyPaused => "Playback is already paused.",
+            CommandStatus.NothingToResume => "There is nothing to resume.",
+            CommandStatus.AlreadyPlaying => "Playback is already active.",
+            CommandStatus.AlreadyStopped => "There is nothing to stop.",
+            _ => "Command failed."
+        };
+        
+        await RespondEphemeralAsync(response);
     }
 
     private Task<InteractionCallbackResponse?> RespondEphemeralAsync(string content)

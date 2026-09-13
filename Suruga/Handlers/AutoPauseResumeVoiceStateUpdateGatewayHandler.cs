@@ -1,26 +1,12 @@
 ﻿using NetCord.Gateway;
 using NetCord.Hosting.Gateway;
 using Suruga.Audio;
-using Suruga.Audio.Commands.Playback;
 using Suruga.Audio.Primitives;
 
 namespace Suruga.Handlers;
 
-/// <summary>
-/// Handles voice state updates and automatically pauses or resumes playback when the bot
-/// is server muted or unmuted.
-/// </summary>
-/// <remarks>
-/// This handler reacts only to voice state changes for the bot itself.
-/// </remarks>
-internal sealed class AutoPauseResumeVoiceStateUpdateGatewayHandler(GatewayClient gatewayClient, AudioSessionManager sessionManager)
-	: IVoiceStateUpdateGatewayHandler
+internal sealed class AutoPauseResumeVoiceStateUpdateGatewayHandler(GatewayClient gatewayClient, AudioSessionManager sessionManager) : IVoiceStateUpdateGatewayHandler
 {
-    /// <summary>
-    /// Processes a voice state update event.
-    /// </summary>
-    /// <param name="arg">The updated voice state information.</param>
-    /// <returns>A task representing the asynchronous operation.</returns>
     public async ValueTask HandleAsync(VoiceState arg)
 	{
         // Ignore voice state updates that are not from this bot.
@@ -41,7 +27,7 @@ internal sealed class AutoPauseResumeVoiceStateUpdateGatewayHandler(GatewayClien
             // Auto-pause when server-muted.
             if (player.State is not AudioPlayerState.Paused)
             {
-	            await player.PostAsync(new PauseAudioCommand());
+	            await player.PauseAsync();
             }
 		}
 		else
@@ -49,7 +35,7 @@ internal sealed class AutoPauseResumeVoiceStateUpdateGatewayHandler(GatewayClien
             // Auto-resume when unmuted.
             if (player.State is AudioPlayerState.Paused)
             {
-	            await player.PostAsync(new ResumeAudioCommand());
+	            await player.ResumeAsync();
             }
 		}
 	}

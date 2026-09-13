@@ -1,35 +1,46 @@
-﻿using Suruga.FFmpeg;
+﻿using System.Runtime.CompilerServices;
+using Suruga.FFmpeg;
 using Suruga.FFmpeg.Primitives;
 using Suruga.PostProcessing;
 
 namespace Suruga.Audio;
 
-internal sealed class AudioPipeline
+internal sealed class AudioPipeline(AudioDecoder decoder, AudioPostProcessor postProcessor, AudioSink sink)
 {
-    private readonly AudioDecoder _decoder;
-    private readonly AudioPostProcessor _postProcessor;
-
-    internal AudioPipeline(AudioDecoder decoder, AudioPostProcessor postProcessor)
+    internal async IAsyncEnumerable<AudioFramebuffer> GetAudioFrameBuffers([EnumeratorCancellation] CancellationToken token = default)
     {
-        _decoder = decoder;
-        _postProcessor = postProcessor;
-    }
-    
-    internal IEnumerable<AudioFrameBuffer> GetAudioChunks(CancellationToken token = default)
-    {
-        while (!token.IsCancellationRequested)
+        try
         {
-            if (!_decoder.TryDecodeNextChunk(out AudioFrameBuffer? decoded, token))
+            while (!token.IsCancellationRequested)
             {
-                break;
+                if (!decoder.TryDecodeNextFramebuffer(out AudioFramebuffer? decoded, token))
+                {
+                    break;
+                }
+            
+                if (!postProcessor.TryPostProcessFrame(decoded, out AudioFramebuffer? postProcessed))
+                {
+                    continue;
+                }
+            
+                yield return postProcessed;
             }
             
-            if (!_postProcessor.TryPostProcessFrame(decoded, out AudioFrameBuffer? postProcessed))
+            if (!token.IsCancellationRequested)
             {
-                continue;
+                foreach (AudioFramebuffer flushed in decoder.Flush())
+                {
+                    if (postProcessor.TryPostProcessFrame(flushed, out AudioFramebuffer? postProcessed))
+                    {
+                        yield return postProcessed;
+                    }
+                }
             }
-            
-            yield return postProcessed;
+        }
+        finally
+        {
+            postProcessor.Reset();
+            await sink.FlushAsync(CancellationToken.None);
         }
     }
 }

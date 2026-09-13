@@ -1,8 +1,8 @@
 ﻿using System.Collections.Concurrent;
 using System.Diagnostics.CodeAnalysis;
-using Microsoft.Extensions.Logging;
 using NetCord.Gateway;
 using NetCord.Logging;
+using Suruga.Common;
 using Suruga.Persistence;
 using Suruga.Resolvers;
 using Suruga.Transport;
@@ -12,35 +12,27 @@ namespace Suruga.Audio;
 internal sealed class AudioSessionManager
 (
     GatewayClient gatewayClient,
-    TrackStreamResolverRouter trackStreamResolverRouter,
+    TrackStreamResolverRouter resolverRouter,
     ReadOnlyAudioByteStreamFactory byteStreamFactory,
-    TrackQueueStateRepository repository,
-    IVoiceLogger voiceLogger,
-    ILoggerFactory loggerFactory
+    TrackQueueRepository repository,
+    IVoiceLogger voiceLogger
 )
 {
     private readonly ConcurrentDictionary<ulong, AudioSession> _sessions = [];
 
     internal AudioSession GetOrCreateSession(ulong guildId)
     {
-        if (_sessions.TryGetValue(guildId, out AudioSession? session))
-        {
-            return session;
-        }
-
-        session = new AudioSession
-        (
-            gatewayClient,
-            trackStreamResolverRouter,
-            byteStreamFactory,
-            repository,
-            voiceLogger,
-            loggerFactory,
-            guildId
-        );
+        Logger.Info<AudioSessionManager>($"Creating/getting audio session for guild {guildId}");
         
-        _sessions[guildId] = session;
-        return session;
+        return _sessions.GetOrAdd(guildId, static (id, args) => new AudioSession
+        (
+            args.gatewayClient,
+            args.resolverRouter,
+            args.byteStreamFactory,
+            args.persistence,
+            args.voiceLogger,
+            id
+        ), (gatewayClient, resolverRouter, byteStreamFactory, persistence: repository, voiceLogger));
     }
 
     internal bool TryGetSession(ulong guildId, [NotNullWhen(true)] out AudioSession? session)
@@ -51,9 +43,13 @@ internal sealed class AudioSessionManager
 
     internal async Task DisconnectAllSessionsAsync()
     {
+        Logger.Info<AudioSessionManager>($"Disconnecting {_sessions.Count} active audio session(s).");
+        
         foreach (AudioSession session in _sessions.Values)
         {
             await session.DisposeAsync();
         }
+        
+        _sessions.Clear();
     }
 }

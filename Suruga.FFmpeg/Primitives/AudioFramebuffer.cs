@@ -2,7 +2,7 @@
 
 namespace Suruga.FFmpeg.Primitives;
 
-public sealed class AudioFrameBuffer
+public sealed class AudioFramebuffer
 {
     public Memory<byte> Buffer => _buffer.AsMemory(0, LengthInBytes);
 
@@ -18,7 +18,7 @@ public sealed class AudioFrameBuffer
 
     private byte[] _buffer;
 
-    public AudioFrameBuffer(int frameCount, int channels)
+    public AudioFramebuffer(int frameCount, int channels)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(frameCount);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(channels);

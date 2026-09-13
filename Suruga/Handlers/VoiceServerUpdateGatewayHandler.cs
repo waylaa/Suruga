@@ -1,26 +1,11 @@
 ﻿using NetCord.Gateway;
 using NetCord.Hosting.Gateway;
 using Suruga.Audio;
-using Suruga.Audio.Commands.Voice;
 
 namespace Suruga.Handlers;
 
-/// <summary>
-/// Handles Discord voice server updates and ensures the voice connection is re-established
-/// when the guild is moved to a new voice region endpoint.
-/// </summary>
-/// <remarks>
-/// A user or Discord may change the voice server endpoint during region shifts or reconnects.
-/// This handler updates the active audio connection descriptor and triggers a reconnect
-/// when necessary.
-/// </remarks>
 internal sealed class VoiceServerUpdateGatewayHandler(AudioSessionManager sessionManager) : IVoiceServerUpdateGatewayHandler
 {
-    /// <summary>
-    /// Processes a voice server update event.
-    /// </summary>
-    /// <param name="arg">The voice server update event data.</param>
-    /// <returns>A task representing the asynchronous operation.</returns>
     public async ValueTask HandleAsync(VoiceServerUpdateEventArgs arg)
 	{
 		if (!sessionManager.TryGetSession(arg.GuildId, out AudioSession? session))
@@ -28,6 +13,6 @@ internal sealed class VoiceServerUpdateGatewayHandler(AudioSessionManager sessio
 			return;
 		}
 		
-		await session.Connection.PostAsync(new VoiceServerUpdateEventCommand(arg.Endpoint, arg.Token));
+		await session.Connection.HandleVoiceServerUpdateAsync(arg.Endpoint, arg.Token);
 	}
 }

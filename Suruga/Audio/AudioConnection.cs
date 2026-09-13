@@ -1,138 +1,133 @@
-﻿using System.Threading.Channels;
-using NetCord.Gateway;
+﻿using NetCord.Gateway;
 using NetCord.Logging;
-using Suruga.Audio.Commands;
-using Suruga.Audio.Commands.Connection;
-using Suruga.Audio.Commands.Voice;
 using Suruga.Audio.Primitives;
+using Suruga.Common;
 
 namespace Suruga.Audio;
 
 internal sealed class AudioConnection : IAsyncDisposable
 {
     internal AudioSink Sink { get; }
-
+    
     private readonly VoiceHandshakeCoordinator _handshake = new();
     private readonly VoiceClientLifecycle _lifecycle;
-
-    private readonly Channel<VoiceEventCommand> _voiceEvents = Channel.CreateUnbounded<VoiceEventCommand>();
-    private readonly Channel<ConnectionCommand> _commands = Channel.CreateUnbounded<ConnectionCommand>();
-    private readonly Task _voiceEventLoopTask;
-    private readonly Task _commandLoopTask;
-
+    private readonly SemaphoreSlim _gate = new(1, 1);
+    private readonly ulong _guildId;
+    
+    private ulong _voiceChannelId;
+    private string? _lastEndpoint;
+    private string? _lastToken;
+    
     private bool _isDisposed;
 
-    public AudioConnection(GatewayClient gatewayClient, IVoiceLogger voiceLogger, ulong guildId)
+    internal AudioConnection(GatewayClient gatewayClient, IVoiceLogger voiceLogger, ulong guildId)
     {
+        _guildId = guildId;
+
         Sink = new AudioSink();
         _lifecycle = new VoiceClientLifecycle(gatewayClient, voiceLogger, Sink, _handshake, guildId);
+    }
+    
+    internal async Task<CommandResult> ConnectAsync(ulong voiceChannelId)
+    {
+        ObjectDisposedException.ThrowIf(_isDisposed, this);
+        await _gate.WaitAsync();
 
-        _voiceEventLoopTask = HandleVoiceEventsAsync();
-        _commandLoopTask = HandleCommandsAsync();
+        try
+        {
+            _voiceChannelId = voiceChannelId;
+            return await _lifecycle.ConnectAsync(_voiceChannelId);
+        }
+        catch (Exception ex)
+        {
+            Logger.Error<AudioConnection>(ex, $"Failed to connect to voice channel {voiceChannelId} in guild {_guildId}");
+        }
+        finally
+        {
+            _gate.Release();
+        }
+        
+        return new CommandResult(CommandStatus.Undefined);
     }
 
-    internal async ValueTask<CommandResult> PostAsync(AudioCommand command, CancellationToken token = default)
+    internal async Task HandleVoiceServerUpdateAsync(string? endpoint, string token)
     {
-        switch (command)
+        ObjectDisposedException.ThrowIf(_isDisposed, this);
+
+        if (endpoint == _lastEndpoint && token == _lastToken)
         {
-            case ConnectionCommand connection:
-                await _commands.Writer.WriteAsync(connection, token);
-                break;
-
-            case VoiceEventCommand voiceEvent:
-                await _voiceEvents.Writer.WriteAsync(voiceEvent, token);
-                break;
-
-            default: return new CommandResult(CommandStatus.Undefined);
+            return;
         }
 
-        await using (token.Register(() => command.SetCanceled(token)))
-        {
-            return await command.Task;
-        }
-    }
+        _lastEndpoint = endpoint;
+        _lastToken = token;
+        
+        bool isValid = _handshake.OnVoiceServerUpdate(endpoint, token);
 
-    private async Task HandleVoiceEventsAsync()
-    {
-        await foreach (VoiceEventCommand command in _voiceEvents.Reader.ReadAllAsync())
+        if (isValid)
         {
+            if (!_lifecycle.IsConnected)
+            {
+                return;
+            }
+            
+            await _gate.WaitAsync();
+
             try
             {
-                CommandResult result = command switch
-                {
-                    VoiceServerUpdateEventCommand voiceServer => await OnVoiceServerUpdateAsync(voiceServer),
-                    VoiceStateUpdateEventCommand voiceState => await OnVoiceStateUpdateAsync(voiceState),
-                    _ => new CommandResult(CommandStatus.Undefined)
-                };
-
-                command.SetResult(result);
+                await _lifecycle.ReconnectAsync();
             }
             catch (Exception ex)
             {
-                command.SetException(ex);
+                Logger.Error<AudioConnection>(ex, $"Failed to reconnect voice client during region change in guild {_guildId}");
             }
-        }
-    }
-
-    private async Task HandleCommandsAsync()
-    {
-        await foreach (ConnectionCommand command in _commands.Reader.ReadAllAsync())
-        {
-            try
+            finally
             {
-                CommandResult result = command switch
-                {
-                    ConnectCommand connect => _isDisposed
-                        ? new CommandResult(CommandStatus.Undefined)
-                        : await _lifecycle.ConnectAsync(connect.VoiceChannelId),
-                    DisconnectCommand => await DisconnectAsync(),
-                    _ => new CommandResult(CommandStatus.Undefined)
-                };
-
-                command.SetResult(result);
-            }
-            catch (Exception ex)
-            {
-                command.SetException(ex);
+                _gate.Release();
             }
         }
-    }
-
-    private async Task<CommandResult> OnVoiceServerUpdateAsync(VoiceServerUpdateEventCommand eventCommand)
-    {
-        bool valid = _handshake.OnVoiceServerUpdate(eventCommand.Endpoint, eventCommand.Token);
-
-        if (!valid)
+        else
         {
-            return new CommandResult(CommandStatus.Disconnected);
-        }
-
-        if (_lifecycle.IsConnected)
-        {
-            await _lifecycle.ReconnectAsync();
-        }
-
-        return new CommandResult(CommandStatus.Success);
-    }
-
-    private async Task<CommandResult> OnVoiceStateUpdateAsync(VoiceStateUpdateEventCommand eventCommand)
-    {
-        bool valid = _handshake.OnVoiceStateUpdate(eventCommand.UserId, eventCommand.ChannelId, eventCommand.SessionId);
-
-        if (!valid)
-        {
+            Logger.Warning<AudioConnection>($"Voice server update was invalid. Disconnecting from guild {_guildId}");
             await DisconnectAsync();
-
-            return new CommandResult(CommandStatus.Disconnected);
         }
+    }
+    
+    internal async Task HandleVoiceStateUpdateAsync(ulong userId, ulong? channelId, string sessionId)
+    {
+        ObjectDisposedException.ThrowIf(_isDisposed, this);
+        bool isValid = _handshake.OnVoiceStateUpdate(userId, channelId, sessionId);
 
-        return new CommandResult(CommandStatus.Success);
+        if (!isValid)
+        {
+            Logger.Warning<AudioConnection>($"A user disconnected the bot from voice channel {_voiceChannelId} in guild {_guildId}. Disconnecting the voice client.");
+            await DisconnectAsync();
+        }
+    }
+    
+    private Task DisconnectAsync()
+    {
+        ObjectDisposedException.ThrowIf(_isDisposed, this);
+        return DisconnectCoreAsync();
     }
 
-    private async Task<CommandResult> DisconnectAsync()
+    private async Task DisconnectCoreAsync()
     {
-        await _lifecycle.DisconnectAsync();
-        return new CommandResult(CommandStatus.Success);
+        await _gate.WaitAsync();
+
+        try
+        {
+            await _lifecycle.DisconnectAsync();
+        }
+        catch (Exception ex)
+        {
+            ulong voiceChannelId = Volatile.Read(ref _voiceChannelId);
+            Logger.Error<AudioConnection>(ex, $"Failed to disconnect from voice channel {voiceChannelId} in guild {_guildId}");
+        }
+        finally
+        {
+            _gate.Release();
+        }
     }
 
     public async ValueTask DisposeAsync()
@@ -143,28 +138,10 @@ internal sealed class AudioConnection : IAsyncDisposable
         }
 
         _isDisposed = true;
-
-        _voiceEvents.Writer.TryComplete();
-        _commands.Writer.TryComplete();
-
-        try
-        {
-            await _voiceEventLoopTask;
-        }
-        catch
-        {
-            // Ignore.
-        }
-
-        try
-        {
-            await _commandLoopTask;
-        }
-        catch
-        {
-            // Ignore.
-        }
-
-        await _lifecycle.DisconnectAsync();
+        Logger.Debug<AudioConnection>($"Disposing audio connection in guild {_guildId}");
+        
+        await DisconnectCoreAsync();
+        _gate.Dispose();
+        await Sink.DisposeAsync();
     }
 }
