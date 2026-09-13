@@ -6,6 +6,12 @@ ARG TARGETARCH
 
 WORKDIR /src
 
+# NativeAOT setup
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends clang zlib1g-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY ["Suruga.Common/Suruga.Common.csproj", "Suruga.Common/"]
 COPY ["Suruga/Suruga.csproj", "Suruga/"]
 COPY ["Suruga.FFmpeg/Suruga.FFmpeg.csproj", "Suruga.FFmpeg/"]
 COPY ["Suruga.PostProcessing/Suruga.PostProcessing.csproj", "Suruga.PostProcessing/"]
@@ -23,7 +29,10 @@ RUN dotnet publish "Suruga/Suruga.csproj" \
     -r $(cat /tmp/rid.txt) \
     -p:PublishDir=/app/publish
 
-FROM mcr.microsoft.com/dotnet/runtime-deps:10.0-noble-chiseled AS runtime
+FROM mcr.microsoft.com/dotnet/runtime-deps:10.0-noble AS runtime
 WORKDIR /app
+
 COPY --from=publish /app/publish .
+
+ENV LD_LIBRARY_PATH=/app
 ENTRYPOINT ["./Suruga"]
