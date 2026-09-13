@@ -1,6 +1,6 @@
 ﻿namespace Suruga.Audio.Primitives;
 
-internal enum LoopMode
+public enum LoopMode
 {
     None,
     Track,
