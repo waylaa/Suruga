@@ -32,6 +32,10 @@
 		<PackageReference Include="NetCord.Services" Version="1.0.0-beta.20" />
 		<PackageReference Include="OpusSharp.Natives" Version="1.6.1.4" />
 	</ItemGroup>
+	
+	<ItemGroup>
+		<InternalsVisibleTo Include="Suruga.Tests" />
+	</ItemGroup>
 
 	<PropertyGroup Condition="'$(Configuration)' == 'Release'">
 		<DebugSymbols>false</DebugSymbols>

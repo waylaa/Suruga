@@ -12,5 +12,6 @@
   <Project Path="Suruga.Common/Suruga.Common.csproj" />
   <Project Path="Suruga.FFmpeg/Suruga.FFmpeg.csproj" />
   <Project Path="Suruga.PostProcessing/Suruga.PostProcessing.csproj" />
+  <Project Path="Suruga.Tests/Suruga.Tests.csproj" />
   <Project Path="Suruga/Suruga.csproj" />
 </Solution>
