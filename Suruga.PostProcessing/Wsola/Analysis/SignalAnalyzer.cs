@@ -9,7 +9,7 @@ internal sealed class SignalAnalyzer
     
     // Minimum periodicity is the shortest period it will detect the highest pitch
     // and maximum periodicity for the lowest pitch. This range covers most musical
-    // instruments and speech. 48kHz sample rate is Discord's requirement.
+    // instruments and speech. 48kHz sample rate is also Discord's requirement so we can use const.
     private const int MinimumPeriodicity = 32; // 48kHz / 32 = 1500Hz
     private const int MaximumPeriodicity = 800; // 48kHz / 800 = 60Hz
 
