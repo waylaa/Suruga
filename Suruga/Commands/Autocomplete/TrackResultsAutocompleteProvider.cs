@@ -7,10 +7,6 @@ using Suruga.Resolvers;
 
 namespace Suruga.Commands.Autocomplete;
 
-/// <summary>
-/// Provides autocomplete suggestions for track search queries.
-/// </summary>
-/// <param name="services">A service provider.</param>
 public sealed class TrackResultsAutocompleteProvider(IServiceProvider services) : IAutocompleteProvider<AutocompleteInteractionContext>
 {
     private static readonly Debouncer<ulong> Debouncer = new(TimeSpan.FromMilliseconds(700));

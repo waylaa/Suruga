@@ -7,8 +7,7 @@ using Suruga.Primitives;
 
 namespace Suruga.Commands.Interactions;
 
-internal abstract class PaginatedInteractionModule(AudioSessionManager sessionManager, PaginatorManager paginatorManager)
-    : ComponentInteractionModule<ComponentInteractionContext>
+internal abstract class PaginatedInteractionModule(AudioSessionManager sessionManager, PaginatorManager paginatorManager) : ComponentInteractionModule<ComponentInteractionContext>
 {
     protected async Task HandlePageMoveAsync(Action<Paginator<Track>> movePage, Func<AudioSession, Paginator<Track>, EmbedProperties> buildEmbed)
     {

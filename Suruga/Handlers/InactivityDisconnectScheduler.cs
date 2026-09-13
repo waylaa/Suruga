@@ -37,13 +37,11 @@ internal sealed class InactivityDisconnectScheduler(TimeSpan delay)
         }
         catch (TaskCanceledException)
         {
-            // Ignore.
         }
         finally
         {
             if (_timers.TryRemove(voiceChannelId, out CancellationTokenSource? current) && ReferenceEquals(current, cts))
             {
-                // Already removed above in the common path; guards double-dispose on race.
             }
 
             cts.Dispose();

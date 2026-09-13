@@ -4,17 +4,7 @@ using Suruga.Audio;
 
 namespace Suruga.Handlers;
 
-/// <summary>
-/// Handles voice state updates to automatically disconnect the bot after a period
-/// of inactivity in a voice channel.
-/// </summary>
-/// <remarks>
-/// This handler tracks when a voice channel becomes empty (excluding the bot itself)
-/// and schedules a delayed disconnect. If users rejoin before the timeout expires,
-/// the scheduled disconnect is canceled.
-/// </remarks>
-internal sealed class InactivityTrackVoiceStateUpdateGatewayHandler(GatewayClient gatewayClient, AudioSessionManager sessionManager)
-	: IVoiceStateUpdateGatewayHandler
+internal sealed class InactivityTrackVoiceStateUpdateGatewayHandler(GatewayClient gatewayClient, AudioSessionManager sessionManager) : IVoiceStateUpdateGatewayHandler
 {
 	private readonly VoiceChannelOccupancyReader _occupancy = new(gatewayClient);
 	private readonly InactivityDisconnectScheduler _scheduler = new(TimeSpan.FromMinutes(5));

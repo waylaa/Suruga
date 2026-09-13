@@ -11,19 +11,9 @@ namespace Suruga.Commands.Autocomplete;
 /// <see cref="WaitAsync(T)"/> with the same key cancels any pending wait for that key
 /// before starting a new delay period.
 /// </remarks>
-internal sealed class Debouncer<T> where T : notnull
+internal sealed class Debouncer<T>(TimeSpan delay) where T : notnull
 {
 	private readonly ConcurrentDictionary<T, CancellationTokenSource> _ctsMap = [];
-	private readonly TimeSpan _delay;
-	
-	/// <summary>
-	/// Initializes a new instance of the <see cref="Debouncer{T}"/> class.
-	/// </summary>
-	/// <param name="delay">
-	/// The amount of time to wait before considering the operation settled.
-	/// </param>
-	internal Debouncer(TimeSpan delay)
-		=> _delay = delay;
 
 	/// <summary>
 	/// Waits for the debounce period to elapse, canceling any existing wait
@@ -47,7 +37,7 @@ internal sealed class Debouncer<T> where T : notnull
 
 		try
 		{
-			await Task.Delay(_delay, cts.Token);
+			await Task.Delay(delay, cts.Token);
 			return true;
 		}
 		catch (OperationCanceledException)

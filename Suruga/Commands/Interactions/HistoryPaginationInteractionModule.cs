@@ -6,8 +6,7 @@ using Suruga.Pagination;
 
 namespace Suruga.Commands.Interactions;
 
-internal sealed class HistoryPaginationInteractionModule(AudioSessionManager sessionManager, PaginatorManager paginatorManager)
-	: PaginatedInteractionModule(sessionManager, paginatorManager)
+internal sealed class HistoryPaginationInteractionModule(AudioSessionManager sessionManager, PaginatorManager paginatorManager) : PaginatedInteractionModule(sessionManager, paginatorManager)
 {
 	[ComponentInteraction("history_page_previous")]
 	public Task ShowPreviousPage()
