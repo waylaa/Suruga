@@ -1,14 +1,11 @@
 ﻿namespace Suruga.PostProcessing.Resampling;
 
-internal sealed class ResamplerState
+internal sealed class ResamplerState(int channels)
 {
-    internal float[] PreviousFrame { get; }
+    internal float[] PreviousFrame { get; } = GC.AllocateUninitializedArray<float>(channels);
     
     internal double Fraction;
     internal bool HasHistory;
-    
-    internal ResamplerState(int channels)
-        => PreviousFrame = GC.AllocateUninitializedArray<float>(channels);
 
     internal void Reset()
     {
