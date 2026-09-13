@@ -6,21 +6,37 @@ using Suruga.Options;
 
 namespace Suruga.Persistence;
 
-internal sealed class DatabaseClient(IOptions<DatabaseOptions> options) : IDisposable
+internal sealed class DatabaseClient : IDisposable
 {
-    private readonly DatabaseOptions _options = options.Value;
-    
-    private readonly string _connectionString = new SqliteConnectionStringBuilder
-    {
-        DataSource = string.IsNullOrWhiteSpace(options.Value.Path) ? Path.Combine(AppContext.BaseDirectory, "suruga.db") : options.Value.Path,
-        Mode = SqliteOpenMode.ReadWriteCreate,
-        Cache = SqliteCacheMode.Shared
-    }.ToString();
-    
+    private readonly DatabaseOptions _options;
+    private readonly string _connectionString;
     private readonly Lock _lock = new();
     
     private bool _isSchemaInitialized;
     private bool _isDisposed;
+
+    public DatabaseClient(IOptions<DatabaseOptions> options)
+    {
+        _options = options.Value;
+        
+        string databasePath = string.IsNullOrWhiteSpace(_options.Path)
+            ? Path.Combine(AppContext.BaseDirectory, "suruga.db")
+            : _options.Path;
+        
+        string? directory = Path.GetDirectoryName(databasePath);
+
+        if (!string.IsNullOrEmpty(directory))
+        {
+            Directory.CreateDirectory(directory);
+        }
+        
+        _connectionString = new SqliteConnectionStringBuilder
+        {
+            DataSource = databasePath,
+            Mode = SqliteOpenMode.ReadWriteCreate,
+            Cache = SqliteCacheMode.Shared
+        }.ToString();
+    }
 
     internal bool TryGetConnection([NotNullWhen(true)] out SqliteConnection? connection)
     {
