@@ -1,5 +1,4 @@
 ﻿using System.Runtime.CompilerServices;
-using Microsoft.Extensions.Logging;
 using Suruga.FFmpeg.Primitives;
 using Suruga.PostProcessing.Extensions;
 using Suruga.PostProcessing.Primitives;
@@ -8,7 +7,7 @@ using Suruga.PostProcessing.Resampling.Buffers;
 
 namespace Suruga.PostProcessing.Processors;
 
-internal sealed class Resampler : IAudioProcessor
+internal sealed class Resampler(int channels) : IAudioProcessor
 {
     internal float Rate
     {
@@ -20,22 +19,10 @@ internal sealed class Resampler : IAudioProcessor
         }
     } = 1;
     
-    private readonly ILogger<Resampler> _logger;
-
-    private readonly ResamplerBuffer _input;
-    private readonly ResamplerState _state;
-    private readonly int _channels;
+    private readonly ResamplerBuffer _input = new(1024, channels);
+    private readonly ResamplerState _state = new(channels);
     
-    internal Resampler(int channels, ILogger<Resampler> logger)
-    {
-        _channels = channels;
-        _logger = logger;
-        
-        _input = new ResamplerBuffer(1024, channels);
-        _state = new ResamplerState(channels);
-    }
-    
-    public AudioProcessorStatus SendFrame(AudioFrameBuffer? frame)
+    public AudioProcessorStatus SendFrame(AudioFramebuffer? frame)
     {
         if (Rate.IsApproximatelyEqualTo(1))
         {
@@ -55,7 +42,7 @@ internal sealed class Resampler : IAudioProcessor
         return AudioProcessorStatus.Success;
     }
 
-    public AudioProcessorStatus ReceiveFrame(out AudioFrameBuffer? frame)
+    public AudioProcessorStatus ReceiveFrame(out AudioFramebuffer? frame)
     {
         frame = null;
 
@@ -87,11 +74,11 @@ internal sealed class Resampler : IAudioProcessor
         return _input.AvailableFrames >= requiredInputFrames;
     }
 
-    private AudioFrameBuffer Resample(int outputFrames)
+    private AudioFramebuffer Resample(int outputFrames)
     {
-        AudioFrameBuffer output = new(outputFrames, _channels);
-
+        AudioFramebuffer output = new(outputFrames, channels);
         Span<float> destination = output.Samples;
+        
         int requiredInputFrames = (int)Math.Ceiling(_state.Fraction + outputFrames * Rate) + 2;
         ReadOnlySpan<float> input = _input.Peek(0, requiredInputFrames);
 
@@ -137,9 +124,9 @@ internal sealed class Resampler : IAudioProcessor
         double fraction
     )
     {
-        int destinationOffset = outputFrameIndex * _channels;
+        int destinationOffset = outputFrameIndex * channels;
 
-        for (int channel = 0; channel < _channels; channel++)
+        for (int channel = 0; channel < channels; channel++)
         {
             float p0;
 
@@ -149,12 +136,12 @@ internal sealed class Resampler : IAudioProcessor
             }
             else
             {
-                p0 = input[(inputFrameIndex - 1) * _channels + channel];
+                p0 = input[(inputFrameIndex - 1) * channels + channel];
             }
             
-            float p1 = input[inputFrameIndex * _channels + channel];
-            float p2 = input[(inputFrameIndex + 1) * _channels + channel];
-            float p3 = input[(inputFrameIndex + 2) * _channels + channel];
+            float p1 = input[inputFrameIndex * channels + channel];
+            float p2 = input[(inputFrameIndex + 1) * channels + channel];
+            float p3 = input[(inputFrameIndex + 2) * channels + channel];
 
             output[destinationOffset + channel] = CatmullRomInterpolator.Interpolate(p0, p1, p2, p3, fraction);
         }
@@ -169,14 +156,11 @@ internal sealed class Resampler : IAudioProcessor
 
         int lastFrameIndex = consumedFrames - 1;
 
-        for (int channel = 0; channel < _channels; channel++)
+        for (int channel = 0; channel < channels; channel++)
         {
-            _state.PreviousFrame[channel] = input[lastFrameIndex * _channels + channel];
+            _state.PreviousFrame[channel] = input[lastFrameIndex * channels + channel];
         }
 
         _state.HasHistory = true;
     }
-
-    public void Dispose()
-        => Reset();
 }

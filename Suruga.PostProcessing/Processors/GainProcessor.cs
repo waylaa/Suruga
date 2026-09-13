@@ -17,9 +17,9 @@ internal sealed class GainProcessor : IAudioProcessor
         }
     } = 1;
     
-    private AudioFrameBuffer? _pendingFrame;
+    private AudioFramebuffer? _pendingFrame;
 
-    public AudioProcessorStatus SendFrame(AudioFrameBuffer? frame)
+    public AudioProcessorStatus SendFrame(AudioFramebuffer? frame)
     {
         if (Gain.IsApproximatelyEqualTo(1))
         {
@@ -38,7 +38,7 @@ internal sealed class GainProcessor : IAudioProcessor
         return AudioProcessorStatus.Success;
     }
 
-    public AudioProcessorStatus ReceiveFrame(out AudioFrameBuffer? frame)
+    public AudioProcessorStatus ReceiveFrame(out AudioFramebuffer? frame)
     {
         if (_pendingFrame is not null)
         {

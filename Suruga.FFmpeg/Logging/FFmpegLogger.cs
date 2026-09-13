@@ -2,61 +2,33 @@
 using System.Runtime.InteropServices;
 using System.Text;
 using Microsoft.Extensions.Logging;
+using Suruga.Common;
 using Suruga.FFmpeg.Helpers;
 using Suruga.FFmpeg.Interop;
 
 namespace Suruga.FFmpeg.Logging;
 
-/// <summary>
-/// Intercepts global FFmpeg log output and forwards it to an <see cref="ILogger"/> implementation.
-/// </summary>
-public sealed unsafe partial class FFmpegLogger
+public sealed unsafe class FFmpegLogger
 {
-    private static ILogger? _logger;
     private static bool _isCreated;
-
-    /// <summary>
-    /// Initializes FFmpeg logging integration and registers the global log callback.
-    /// </summary>
-    /// <param name="logger">The logger used to receive FFmpeg log output.</param>
-    /// <param name="isDevelopmentBuild"></param>
-    /// <returns>An initialized <see cref="FFmpegLogger"/> instance.</returns>
-    /// <exception cref="InvalidOperationException">
-    /// Thrown if the logger has already been initialized.
-    /// </exception>
-    public static FFmpegLogger Initialize(ILogger<FFmpegLogger> logger, bool isDevelopmentBuild)
+    
+    public static FFmpegLogger Initialize(bool isDevelopmentBuild)
     {
-        _logger = logger;
-
         if (_isCreated)
         {
-            throw new InvalidOperationException("Logger is already initialized.");
+            throw new InvalidOperationException("FFmpeg logger is already initialized.");
         }
         
-        NativeMethods.av_log_set_level(isDevelopmentBuild ? Constants.AV_LOG_TRACE : Constants.AV_LOG_INFO);
+        NativeMethods.av_log_set_level(isDevelopmentBuild ? Constants.AV_LOG_DEBUG : Constants.AV_LOG_INFO);
         NativeMethods.av_log_set_callback(&Log);
         
         _isCreated = true;
         return new FFmpegLogger();
     }
-
-    /// <summary>
-    /// Native callback invoked by FFmpeg for each log message.
-    /// </summary>
-    /// <param name="ptr">Pointer to the FFmpeg logging context (unused).</param>
-    /// <param name="level">FFmpeg log level.</param>
-    /// <param name="format">Format string provided by FFmpeg.</param>
-    /// <param name="vl">Variable argument list pointer.</param>
+    
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static void Log(void* ptr, int level, byte* format, byte* vl)
     {
-        ILogger? logger = _logger;
-        
-        if (logger is null)
-        {
-            return;
-        }
-        
         const int bufferSize = 2048;
         Span<byte> buffer = stackalloc byte[bufferSize];
         int printPrefix = 0; // Prevent FFmpeg logs starting with '[FFmpeg]'.
@@ -103,16 +75,9 @@ public sealed unsafe partial class FFmpegLogger
         }
 
         string message = Encoding.UTF8.GetString(span);
-        Log(logger, FromFFmpegLogLevel(level), message);
+        Logger.Log<FFmpegLogger>(FromFFmpegLogLevel(level), message);
     }
-
-    /// <summary>
-    /// Converts an FFmpeg log level into a <see cref="LogLevel"/>.
-    /// </summary>
-    /// <param name="level">The FFmpeg log level constant.</param>
-    /// <returns>
-    /// The mapped <see cref="LogLevel"/>, or <see cref="LogLevel.None"/> if unrecognized.
-    /// </returns>
+    
     private static LogLevel FromFFmpegLogLevel(int level) => level switch
     {
         <= Constants.AV_LOG_FATAL   => LogLevel.Critical,
@@ -123,7 +88,4 @@ public sealed unsafe partial class FFmpegLogger
         <= Constants.AV_LOG_TRACE   => LogLevel.Trace,
         _                           => LogLevel.None
     };
-    
-    [LoggerMessage(Message = "{Message}")]
-    private static partial void Log(ILogger logger, LogLevel level, string message);
 }

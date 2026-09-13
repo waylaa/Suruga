@@ -1,18 +1,13 @@
 ﻿using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Suruga.Common;
 using Suruga.FFmpeg.Loaders;
 using Suruga.FFmpeg.Primitives;
 using Suruga.Options;
 
 namespace Suruga.Services;
 
-/// <summary>
-/// Initializes FFmpeg by locating native libraries at application startup.
-/// </summary>
-/// <param name="options">Bot options.</param>
-/// <param name="logger">Logger.</param>
-internal sealed partial class FFmpegLoaderService(IOptions<BotOptions> options, ILogger<FFmpegLoaderService> logger) : IHostedService
+internal sealed class FFmpegLoaderService(IOptions<BotOptions> options) : IHostedService
 {
     private readonly BotOptions _botOptions = options.Value;
     
@@ -22,7 +17,7 @@ internal sealed partial class FFmpegLoaderService(IOptions<BotOptions> options, 
     {
         try
         {
-            LogUsingFFmpegPath(_botOptions.FFmpegPath);
+            Logger.Trace<FFmpegLoaderService>($"Using FFmpeg libraries from '{_botOptions.FFmpegPath}' as configured by 'BOT_FFMPEGPATH'.");
             
             FFmpegLibraryLoader.Initialize(_botOptions.FFmpegPath);
             CheckVersion();
@@ -38,31 +33,20 @@ internal sealed partial class FFmpegLoaderService(IOptions<BotOptions> options, 
     public Task StopAsync(CancellationToken cancellationToken)
         => Task.CompletedTask;
     
-    private void CheckVersion()
+    private static void CheckVersion()
     {
         string versionInfo = FFmpegVersion.Version;
 
         if (versionInfo.Contains(ExpectedVersion))
         {
-            LogSuccessfulLoad();
+            Logger.Info<FFmpegLoaderService>("FFmpeg loaded successfully.");
             return;
         }
         
-        ReadOnlySpan<char> span = versionInfo.AsSpan();
-
-        span = span.TrimStart('n');
-        int dash = span.IndexOf('-');
-        string version = dash >= 0 ? span[..dash].ToString() : span.ToString();
-                    
-        LogVersionMismatch(version, ExpectedVersion);
+        string temp = versionInfo.TrimStart('n');
+        int dash = temp.IndexOf('-');
+        string version = dash >= 0 ? temp[..dash] : versionInfo;
+        
+        Logger.Warning<FFmpegLoaderService>($"FFmpeg version {version} does not match the expected version {ExpectedVersion}. Compatibility issues may occur.");
     }
-    
-    [LoggerMessage(LogLevel.Information, Message = "FFmpeg loaded successfully.")]
-    private partial void LogSuccessfulLoad();
-    
-    [LoggerMessage(LogLevel.Warning, Message = "FFmpeg version {actual} does not match the expected version {expected}. Compatibility issues may occur.")]
-    private partial void LogVersionMismatch(string actual, string expected);
-    
-    [LoggerMessage(LogLevel.Information, Message = "Using FFmpeg libraries from '{path}' as configured by 'BOT_FFMPEGPATH'.")]
-    private partial void LogUsingFFmpegPath(string path);
 }

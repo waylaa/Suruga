@@ -1,6 +1,4 @@
-﻿using System.Diagnostics;
-using Microsoft.Extensions.Logging;
-using Suruga.FFmpeg.Primitives;
+﻿using Suruga.FFmpeg.Primitives;
 using Suruga.PostProcessing.Extensions;
 using Suruga.PostProcessing.Primitives;
 using Suruga.PostProcessing.Wsola.Analysis;
@@ -23,7 +21,6 @@ internal sealed class TimeStretch : IAudioProcessor
         }
     } = 1;
     
-    private readonly ILogger<TimeStretch> _logger;
     private readonly WsolaBuffer _inputBuffer;
     private readonly int _channels;
     
@@ -38,69 +35,29 @@ internal sealed class TimeStretch : IAudioProcessor
     private int _outputPosition;
     private int _lastSearchRadius;
 
-    internal TimeStretch(int channels, ILoggerFactory loggerFactory)
+    internal TimeStretch(int channels)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(channels);
         
         _channels = channels;
-        _logger = loggerFactory.CreateLogger<TimeStretch>();
-        
-        _synthesizer = new OverlapAddSynthesizer(loggerFactory.CreateLogger<OverlapAddSynthesizer>());
+        _synthesizer = new OverlapAddSynthesizer();
         _inputBuffer = new WsolaBuffer(channels);
     }
     
-    public AudioProcessorStatus SendFrame(AudioFrameBuffer? frame)
+    public AudioProcessorStatus SendFrame(AudioFramebuffer? frame)
     {
         if (frame is null || frame.IsEmpty || Tempo.IsApproximatelyEqualTo(1))
         {
             return AudioProcessorStatus.NoOp;
         }
-        
-        if (_logger.IsEnabled(LogLevel.Trace))
-        {
-            ReadOnlySpan<float> samples = frame.Samples;
-            float peak = 0;
-            float sumSqaures = 0;
-            
-            foreach (float sample in frame.Samples)
-            {
-                float abs = MathF.Abs(sample);
-                
-                if (abs > peak)
-                {
-                    peak = abs;
-                }
-                sumSqaures += sample * sample;
-            }
-            float rms = samples.Length == 0 ? 0 : MathF.Sqrt(sumSqaures / samples.Length);
-            
-            _logger.LogTrace
-            (
-                $"[TS] INPUT: samples={samples.Length} " +
-                $"frames={samples.Length / _channels} " +
-                $"peak={peak:E6} " +
-                $"rms={rms:E6}"
-            );
-        }
 
         _inputBuffer.Append(frame.Samples);
-
-        if (_logger.IsEnabled(LogLevel.Trace))
-        {
-            _logger.LogTrace
-            (
-                $"[TS] SendFrame: bufferLen={_inputBuffer.LengthFrames} " +
-                $"nominalPos={_nominalInputPosition} " +
-                $"outputPos={_outputPosition} " +
-                $"synthLen={_synthesizer.LengthFrames}"
-            );
-        }
-        
         Process();
+        
         return AudioProcessorStatus.Success;
     }
 
-    public AudioProcessorStatus ReceiveFrame(out AudioFrameBuffer? frame)
+    public AudioProcessorStatus ReceiveFrame(out AudioFramebuffer? frame)
     {
         int availableFrames = Math.Min(_outputPosition, _synthesizer.LengthFrames);
 
@@ -112,32 +69,10 @@ internal sealed class TimeStretch : IAudioProcessor
         
         float[] samples = GC.AllocateUninitializedArray<float>(availableFrames * _channels);
         int framesRead = _synthesizer.Read(samples, _channels);
-
-        if (_logger.IsEnabled(LogLevel.Trace))
-        {
-            ReadOnlySpan<float> output = samples.AsSpan(0, framesRead * _channels);
-            
-            float peak = 0;
-            float energy = 0;
-            
-            foreach (float sample in output)
-            {
-                float abs = MathF.Abs(sample);
-                
-                if (abs > peak)
-                {
-                    peak = abs;
-                }
-                
-                energy += sample * sample;
-            }
-            
-            _logger.LogTrace($"[TS] ReceiveFrame: frames={framesRead} peak={peak} rms={Math.Sqrt(energy / output.Length)}");
-        }
         
         _outputPosition -= framesRead;
         
-        frame = new AudioFrameBuffer(framesRead, _channels);
+        frame = new AudioFramebuffer(framesRead, _channels);
         samples.AsSpan(0, framesRead * _channels).CopyTo(frame.Samples);
         
         return AudioProcessorStatus.Success;
@@ -157,18 +92,8 @@ internal sealed class TimeStretch : IAudioProcessor
 
     private void Process()
     {
-        int iterations = 0;
-        Stopwatch? stopwatch = null;
-        
-        if (_logger.IsEnabled(LogLevel.Trace))
-        {
-            stopwatch = Stopwatch.StartNew();
-        }
-        
         while (true)
         {
-            iterations++;
-            
             ReadOnlySpan<float> input = _inputBuffer.Samples;
             int inputFrames = input.Length / _channels;
             int nominalPosition = (int)Math.Round(_nominalInputPosition);
@@ -182,18 +107,6 @@ internal sealed class TimeStretch : IAudioProcessor
 
             if (inputFrames - nominalPosition < parameters.WindowFrames)
             {
-                if (_logger.IsEnabled(LogLevel.Trace))
-                {
-                    _logger.LogTrace
-                    (
-                        $"[TS] Stall: inputFrames={inputFrames}" +
-                        $"nominalPos={nominalPosition}" +
-                        $"needed={parameters.WindowFrames}" +
-                        $"overlap={parameters.OverlapFrames}" +
-                        $"search={parameters.SearchRadiusFrames}"
-                    );
-                }
-                
                 break;
             }
 
@@ -220,39 +133,16 @@ internal sealed class TimeStretch : IAudioProcessor
                 continue;
             }
 
-            WsolaCandidate candidate;
-
-            if (_logger.IsEnabled(LogLevel.Trace))
-            {
-                Stopwatch st = Stopwatch.StartNew();
-            
-                candidate = NccMatcher.FindBest
-                (
-                    input,
-                    _previousFrame,
-                    nominalPosition,
-                    parameters.WindowFrames,
-                    parameters.OverlapFrames,
-                    parameters.SearchRadiusFrames,
-                    _channels
-                );
-            
-                st.Stop();
-                _logger.LogTrace($"[NCC] {stopwatch?.Elapsed.TotalMilliseconds:F2} ms");
-            }
-            else
-            {
-                candidate = NccMatcher.FindBest
-                (
-                    input,
-                    _previousFrame,
-                    nominalPosition,
-                    parameters.WindowFrames,
-                    parameters.OverlapFrames,
-                    parameters.SearchRadiusFrames,
-                    _channels
-                );
-            }
+            WsolaCandidate candidate = NccMatcher.FindBest
+            (
+                input,
+                _previousFrame,
+                nominalPosition,
+                parameters.WindowFrames,
+                parameters.OverlapFrames,
+                parameters.SearchRadiusFrames,
+                _channels
+            );
             
             ReadOnlySpan<float> selectedFrame = input.Slice(
                 candidate.InputPosition * _channels,
@@ -279,19 +169,6 @@ internal sealed class TimeStretch : IAudioProcessor
             _inputBuffer.Discard(framesToDiscard);
             _nominalInputPosition -= framesToDiscard;
         }
-
-        if (_logger.IsEnabled(LogLevel.Trace))
-        {
-            stopwatch?.Stop();
-            
-            _logger.LogTrace
-            (
-                $"[TS] Process: {stopwatch?.ElapsedMilliseconds} ms, " +
-                $"iterations={iterations}, " +
-                $"inputFrames={_inputBuffer.LengthFrames}, " +
-                $"nominal={_nominalInputPosition}"
-            );
-        }
     }
 
     private void Advance(WsolaParameters parameters)
@@ -313,9 +190,5 @@ internal sealed class TimeStretch : IAudioProcessor
             analysisFrames * _channels);
 
         return _analyzer.Analyze(analysis, _channels);
-    }
-
-    public void Dispose()
-    {
     }
 }

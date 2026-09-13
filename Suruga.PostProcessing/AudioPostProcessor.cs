@@ -1,15 +1,14 @@
 ﻿using System.Diagnostics.CodeAnalysis;
-using Microsoft.Extensions.Logging;
 using Suruga.FFmpeg.Primitives;
 using Suruga.PostProcessing.Primitives;
 using Suruga.PostProcessing.Processors;
 
 namespace Suruga.PostProcessing;
 
-public sealed class AudioPostProcessor(ILoggerFactory loggerFactory) : IDisposable
+public sealed class AudioPostProcessor
 {
-    private readonly TimeStretch _timeStretch = new(Channels, loggerFactory);
-    private readonly Resampler _resampler = new(Channels, loggerFactory.CreateLogger<Resampler>());
+    private readonly TimeStretch _timeStretch = new(Channels);
+    private readonly Resampler _resampler = new(Channels);
     private readonly GainProcessor _gain = new();
 
     private float _logicalTempo = 1;
@@ -18,7 +17,7 @@ public sealed class AudioPostProcessor(ILoggerFactory loggerFactory) : IDisposab
     
     private const int Channels = 2;
 
-    public bool TryPostProcessFrame(AudioFrameBuffer input, [NotNullWhen(true)] out AudioFrameBuffer? output)
+    public bool TryPostProcessFrame(AudioFramebuffer input, [NotNullWhen(true)] out AudioFramebuffer? output)
     {
         output = null;
 
@@ -28,17 +27,17 @@ public sealed class AudioPostProcessor(ILoggerFactory loggerFactory) : IDisposab
             return true;
         }
         
-        if (!TryProcessStage(_timeStretch, input, out AudioFrameBuffer? wsolaFrame))
+        if (!TryProcessStage(_timeStretch, input, out AudioFramebuffer? wsolaFrame))
         {
             return false;
         }
         
-        if (!TryProcessStage(_resampler, wsolaFrame, out AudioFrameBuffer? resamplerFrame))
+        if (!TryProcessStage(_resampler, wsolaFrame, out AudioFramebuffer? resamplerFrame))
         {
             return false;
         }
 
-        if (!TryProcessStage(_gain, resamplerFrame, out AudioFrameBuffer? finalFrame))
+        if (!TryProcessStage(_gain, resamplerFrame, out AudioFramebuffer? finalFrame))
         {
             return false;
         }
@@ -67,14 +66,14 @@ public sealed class AudioPostProcessor(ILoggerFactory loggerFactory) : IDisposab
 
     public void SetGain(float value)
         => _gain.Gain = value;
-
+    
     public void Reset()
     {
         _timeStretch.Reset();
         _resampler.Reset();
         _gain.Reset();
     }
-
+    
     private void ApplyParameters()
     {
         _timeStretch.Tempo = _logicalTempo / _pitch;
@@ -84,8 +83,8 @@ public sealed class AudioPostProcessor(ILoggerFactory loggerFactory) : IDisposab
     private static bool TryProcessStage
     (
         IAudioProcessor processor,
-        AudioFrameBuffer input,
-        [NotNullWhen(true)] out AudioFrameBuffer? output
+        AudioFramebuffer input,
+        [NotNullWhen(true)] out AudioFramebuffer? output
     )
     {
         AudioProcessorStatus sendStatus = processor.SendFrame(input);
@@ -117,12 +116,5 @@ public sealed class AudioPostProcessor(ILoggerFactory loggerFactory) : IDisposab
         }
 
         return true;
-    }
-
-    public void Dispose()
-    {
-        _timeStretch.Dispose();
-        _resampler.Dispose();
-        _gain.Dispose();
     }
 }

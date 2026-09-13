@@ -3,11 +3,9 @@ using Suruga.PostProcessing.Primitives;
 
 namespace Suruga.PostProcessing.Processors;
 
-internal interface IAudioProcessor : IDisposable
+internal interface IAudioProcessor
 {
-    AudioProcessorStatus SendFrame(AudioFrameBuffer? frame);
+    AudioProcessorStatus SendFrame(AudioFramebuffer? frame);
     
-    AudioProcessorStatus ReceiveFrame(out AudioFrameBuffer? frame);
-
-    void Reset();
+    AudioProcessorStatus ReceiveFrame(out AudioFramebuffer? frame);
 }

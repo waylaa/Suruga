@@ -11,6 +11,7 @@
     </PropertyGroup>
 
     <ItemGroup>
+      <ProjectReference Include="..\Suruga.Common\Suruga.Common.csproj" />
       <ProjectReference Include="..\Suruga.FFmpeg\Suruga.FFmpeg.csproj" />
     </ItemGroup>
     

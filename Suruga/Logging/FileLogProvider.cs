@@ -4,20 +4,13 @@ using Microsoft.Extensions.Logging;
 
 namespace Suruga.Logging;
 
-/// <summary>
-/// Provides an <see cref="ILoggerProvider"/> implementation that writes log entries to
-/// daily log files on disk.
-/// </summary>
-/// <remarks>
-/// Log files are rotated daily, compressed after rotation, and removed after the
-/// configured retention period has elapsed.
-/// </remarks>
 internal sealed class FileLogProvider : ILoggerProvider
 {
 	private static readonly TimeSpan RetentionPeriod = TimeSpan.FromDays(7);
 	
 	private readonly LogLevel _minimumLevel;
 	private readonly string _logDirectoryPath;
+	private readonly bool _isContainer;
 	
 	private readonly Lock _lock = new();
 	private readonly PeriodicTimer? _retentionTimer;
@@ -25,17 +18,11 @@ internal sealed class FileLogProvider : ILoggerProvider
 	private DateOnly _currentDate;
 	private StreamWriter? _logWriter;
 	private FileStream? _logStream;
-	private bool _isContainer;
 	
 	private const string LogFileExtension = ".log";
 	private const string CompressedLogFileExtension = ".log.gz";
 	private const string DateFormat = "yyyy-MM-dd";
-
-    /// <summary>
-    /// Initializes a new instance of the <see cref="FileLogProvider"/> class.
-    /// </summary>
-    /// <param name="minimumLevel">The minimum log level that will be written.</param>
-    /// <param name="logDirectoryPath">The directory where log files are stored.</param>
+	
     public FileLogProvider(LogLevel minimumLevel, string logDirectoryPath)
 	{
 		_minimumLevel = minimumLevel;
@@ -74,14 +61,7 @@ internal sealed class FileLogProvider : ILoggerProvider
 		{
 		}
 	}
-
-    /// <summary>
-    /// Writes a log entry to the current log file.
-    /// </summary>
-    /// <param name="level">The severity level of the log entry.</param>
-    /// <param name="category">The category associated with the log entry.</param>
-    /// <param name="message">The log message.</param>
-    /// <param name="exception">The exception associated with the log entry, if any.</param>
+	
     private void WriteLog(LogLevel level, string category, string message, Exception? exception)
 	{
 		(string logLvl, string cat, string body, string? exceptionMessage) = LogFormatter.Format(level, category, message, exception);
@@ -121,10 +101,7 @@ internal sealed class FileLogProvider : ILoggerProvider
 		_currentDate = today;
 		OpenLogFile(today);
 	}
-
-    /// <summary>
-    /// Applies log retention and compression rules to existing log files.
-    /// </summary>
+    
     private void ApplyRetentionPolicy()
 	{
 		foreach (string filePath in Directory.EnumerateFiles(_logDirectoryPath, "*.log"))
@@ -215,13 +192,7 @@ internal sealed class FileLogProvider : ILoggerProvider
 		private readonly FileLogProvider _provider;
 		private readonly string _categoryName;
 		private readonly LogLevel _minimumLevel;
-
-        /// <summary>
-        /// Initializes a new instance of the <see cref="FileLogger"/> class.
-        /// </summary>
-        /// <param name="provider">The owning log provider.</param>
-        /// <param name="categoryName">The logger category name.</param>
-        /// <param name="minimumLevel">The minimum enabled log level.</param>
+		
         internal FileLogger(FileLogProvider provider, string categoryName, LogLevel minimumLevel)
 		{
 			_provider = provider;

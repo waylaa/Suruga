@@ -1,26 +1,14 @@
 ﻿using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using NetCord;
 using NetCord.Rest;
 using NetCord.Services.ApplicationCommands;
+using Suruga.Common;
 using Suruga.Options;
 
 namespace Suruga.Services;
 
-/// <summary>
-/// Registers slash commands at application startup.
-/// </summary>
-/// <param name="client">A Discord REST client.</param>
-/// <param name="commandService">Service containing the commands to register.</param>
-/// <param name="logger">Logger.</param>
-internal sealed partial class CommandRegistrationService
-(
-    RestClient client,
-    IApplicationCommandService commandService,
-    IOptions<BotOptions> botOptions,
-    ILogger<CommandRegistrationService> logger
-) : IHostedService
+internal sealed class CommandRegistrationService(RestClient client, IApplicationCommandService commandService, IOptions<BotOptions> botOptions) : IHostedService
 {
     private readonly BotOptions _botOptions = botOptions.Value;
     
@@ -37,7 +25,7 @@ internal sealed partial class CommandRegistrationService
             
             if (Program.IsDevelopmentBuild && developmentGuildId is ulong devGuildId)
             {
-                LogCommandRegistrationAttempt(devGuildId);
+                Logger.Debug<CommandRegistrationService>($"Registering slash commands for development guild {devGuildId}");
 
                 await client.BulkOverwriteGuildApplicationCommandsAsync
                 (
@@ -57,23 +45,14 @@ internal sealed partial class CommandRegistrationService
                 );
             }
         
-            LogSuccessfulCommandRegistration();
+            Logger.Info<CommandRegistrationService>("Guild slash commands registered successfully.");
         }
         catch (Exception ex)
         {
-            LogException(ex, ex.Message);
+            Logger.Error<CommandRegistrationService>(ex);
         }
     }
 
     public Task StopAsync(CancellationToken cancellationToken)
         => Task.CompletedTask;
-
-    [LoggerMessage(LogLevel.Information, Message = "Registering slash commands for development guild {GuildId}")]
-    private partial void LogCommandRegistrationAttempt(ulong guildId);
-
-    [LoggerMessage(LogLevel.Information, Message = "Guild slash commands registered successfully.")]
-    private partial void LogSuccessfulCommandRegistration();
-
-    [LoggerMessage(LogLevel.Error, Message = "{Message}")]
-    private partial void LogException(Exception? exception, string message);
 }

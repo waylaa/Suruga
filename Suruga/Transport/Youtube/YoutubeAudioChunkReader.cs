@@ -1,42 +1,29 @@
-using Microsoft.Extensions.Logging;
+using Suruga.Common;
 using Suruga.Resolvers.Primitives;
 using Suruga.Transport.Policies;
 
 namespace Suruga.Transport.Youtube;
 
-internal sealed partial class YoutubeAudioChunkReader
+internal sealed class YoutubeAudioChunkReader(HttpClient client, IReadOnlyList<AdaptiveFormat> formats)
 {
-    private const int MaxRetrievableChunkLength = 256 * 1024;
-    private const int MaxAttempts = 3;
-
-    private readonly AdaptiveFormatFetcher _fetcher;
+    private readonly AdaptiveFormatFetcher _fetcher = new(client);
     private readonly ChunkPrefetcher _prefetcher = new(MaxRetrievableChunkLength);
-    private readonly AdaptiveFormatRotator _rotator;
-    private readonly ILogger _logger;
-
+    private readonly AdaptiveFormatRotator _rotator = new(formats);
+    
     private int _chunkBufferReadOffset;
     private long? _fallbackLength;
     private int _consecutiveErrors;
-
-    internal YoutubeAudioChunkReader(HttpClient client, IReadOnlyList<AdaptiveFormat> formats, ILogger logger)
-    {
-        _fetcher = new AdaptiveFormatFetcher(client);
-        _rotator = new AdaptiveFormatRotator(formats);
-        _logger = logger;
-
-        LogFormatType(_rotator.Current.Codec);
-    }
+    
+    private const int MaxRetrievableChunkLength = 256 * 1024; // 256KB
+    private const int MaxAttempts = 3;
 
     internal long GetLength()
         => _rotator.Current.ContentLength ?? (_fallbackLength ??= _fetcher.GetContentLength(_rotator.Current.StreamUri));
-
-    /// <summary>
-    /// Reads bytes starting at <paramref name="position"/>, fetching new chunks and
-    /// rotating formats as needed. Mirrors <see cref="Stream.Read(Span{byte})"/> semantics.
-    /// </summary>
+    
     internal int ReadAt(long position, long length, Span<byte> buffer)
     {
-        int bytesToRead = InputOutputRetryPolicy.Execute(
+        int bytesToRead = InputOutputRetryPolicy.Execute
+        (
             MaxAttempts,
             buffer,
             (_, buf) =>
@@ -57,10 +44,11 @@ internal sealed partial class YoutubeAudioChunkReader
             (ex, _) =>
             {
                 _consecutiveErrors++;
-                LogIoWarning(ex, ex.Message);
+                Logger.Warning<YoutubeAudioChunkReader>(ex);
             },
             (_, _) => _consecutiveErrors >= MaxAttempts && _rotator.IsLast,
-            ex => throw new InvalidOperationException("Failed to read audio byte stream after exhausting all formats and retries.", ex));
+            ex => throw new InvalidOperationException("Failed to read audio byte stream after exhausting all formats and retries.", ex)
+        );
 
         _prefetcher.Buffer.Span.Slice(_chunkBufferReadOffset, bytesToRead).CopyTo(buffer);
         _chunkBufferReadOffset += bytesToRead;
@@ -68,7 +56,8 @@ internal sealed partial class YoutubeAudioChunkReader
         return bytesToRead;
     }
 
-    internal void InvalidateChunk() => _prefetcher.InvalidateActiveChunk();
+    internal void InvalidateChunk()
+        => _prefetcher.InvalidateActiveChunk();
 
     internal void InvalidateIfOutsidePrefetchWindow(long position)
     {
@@ -83,24 +72,16 @@ internal sealed partial class YoutubeAudioChunkReader
         if (_consecutiveErrors >= MaxAttempts && !_rotator.IsLast)
         {
             AdaptiveFormat next = _rotator.RotateToNext();
+            
             _fallbackLength = null;
             _consecutiveErrors = 0;
             _prefetcher.Invalidate();
-
-            LogFormatTypeSwitch(next.Codec);
+            
+            Logger.Debug<YoutubeAudioChunkReader>($"Switched audio track codec to '{next.Codec}' with lower bitrate. Expect reduced audio quality.");
         }
 
         AdaptiveFormat format = _rotator.Current;
         _prefetcher.LoadChunk((start, end, buffer) => _fetcher.FetchRange(start, end, buffer, format.StreamUri), position, length);
         _chunkBufferReadOffset = 0;
     }
-
-    [LoggerMessage(Level = LogLevel.Warning, Message = "{Message}")]
-    private partial void LogIoWarning(Exception? exception, string? message);
-
-    [LoggerMessage(Level = LogLevel.Warning, Message = "Switched audio track codec to '{codecType}' with lower bitrate. Expect reduced audio quality.")]
-    private partial void LogFormatTypeSwitch(string codecType);
-
-    [LoggerMessage(Level = LogLevel.Trace, Message = "Audio track codec is of type '{codecType}'.")]
-    private partial void LogFormatType(string codecType);
 }

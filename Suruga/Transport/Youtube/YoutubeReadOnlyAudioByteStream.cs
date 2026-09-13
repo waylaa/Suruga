@@ -1,10 +1,10 @@
-﻿using Microsoft.Extensions.Logging;
+﻿using Suruga.Common;
 using Suruga.Resolvers.Primitives;
 using Suruga.Transport.Extensions;
 
 namespace Suruga.Transport.Youtube;
 
-internal sealed partial class YoutubeReadOnlyAudioByteStream : ReadOnlyAudioByteStream
+internal sealed class YoutubeReadOnlyAudioByteStream(HttpClient client, IReadOnlyList<AdaptiveFormat> formats) : ReadOnlyAudioByteStream
 {
     public override long Length => _reader.GetLength();
 
@@ -14,14 +14,7 @@ internal sealed partial class YoutubeReadOnlyAudioByteStream : ReadOnlyAudioByte
         set => field = Math.Clamp(value, 0, Length);
     }
 
-    private readonly YoutubeAudioChunkReader _reader;
-    private readonly ILogger<YoutubeReadOnlyAudioByteStream> _logger;
-
-    internal YoutubeReadOnlyAudioByteStream(HttpClient client, IReadOnlyList<AdaptiveFormat> formats, ILogger<YoutubeReadOnlyAudioByteStream> logger)
-    {
-        _reader = new YoutubeAudioChunkReader(client, formats, logger);
-        _logger = logger;
-    }
+    private readonly YoutubeAudioChunkReader _reader = new(client, formats);
 
     public override int Read(Span<byte> buffer)
     {
@@ -32,8 +25,8 @@ internal sealed partial class YoutubeReadOnlyAudioByteStream : ReadOnlyAudioByte
 
         int bytesRead = _reader.ReadAt(Position, Length, buffer);
         Position += bytesRead;
-
-        LogBuffering(Position.ToFormattedBytes(), Length.ToFormattedBytes());
+        
+        Logger.Trace<YoutubeReadOnlyAudioByteStream>($"Buffering {Position.ToFormattedBytes()} of {Length.ToFormattedBytes()}.");
         return bytesRead;
     }
 
@@ -46,14 +39,14 @@ internal sealed partial class YoutubeReadOnlyAudioByteStream : ReadOnlyAudioByte
             SeekOrigin.End => Length + offset,
             _ => throw new ArgumentOutOfRangeException(nameof(origin)),
         };
+        
+        Logger.Trace<YoutubeReadOnlyAudioByteStream>($"Seeking {newPosition.ToFormattedBytes()} of {Length.ToFormattedBytes()}.");
 
         Position = Math.Max(0, Math.Min(newPosition, Length));
+        
         _reader.InvalidateChunk();
         _reader.InvalidateIfOutsidePrefetchWindow(Position);
 
         return Position;
     }
-
-    [LoggerMessage(Level = LogLevel.Trace, Message = "Buffering {start} of {total}.")]
-    private partial void LogBuffering(string start, string total);
 }

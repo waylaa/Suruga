@@ -3,15 +3,8 @@ using System.Net.Http.Headers;
 
 namespace Suruga.Transport.Youtube;
 
-internal sealed class AdaptiveFormatFetcher
+internal sealed class AdaptiveFormatFetcher(HttpClient client)
 {
-    private readonly HttpClient _client;
-
-    internal AdaptiveFormatFetcher(HttpClient client)
-    {
-        _client = client;
-    }
-
     internal int FetchRange(long chunkStart, long chunkEnd, Memory<byte> buffer, string streamUri)
     {
         int expectedBytes = (int)(chunkEnd - chunkStart + 1);
@@ -19,7 +12,7 @@ internal sealed class AdaptiveFormatFetcher
         using HttpRequestMessage request = new(HttpMethod.Get, streamUri);
         request.Headers.Range = new RangeHeaderValue(chunkStart, chunkEnd);
 
-        using HttpResponseMessage response = _client.Send(request, HttpCompletionOption.ResponseHeadersRead);
+        using HttpResponseMessage response = client.Send(request, HttpCompletionOption.ResponseHeadersRead);
         response.EnsureSuccessStatusCode();
 
         using Stream networkStream = response.Content.ReadAsStream();
@@ -31,7 +24,7 @@ internal sealed class AdaptiveFormatFetcher
     internal long GetContentLength(string streamUri)
     {
         using HttpRequestMessage request = new(HttpMethod.Head, streamUri);
-        using HttpResponseMessage response = _client.Send(request, HttpCompletionOption.ResponseHeadersRead);
+        using HttpResponseMessage response = client.Send(request, HttpCompletionOption.ResponseHeadersRead);
         response.EnsureSuccessStatusCode();
 
         if (response.Content.Headers.ContentRange?.Length is long totalBytes)

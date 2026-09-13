@@ -9,6 +9,7 @@
     <File Path="compose.yaml" />
     <File Path="README.md" />
   </Folder>
+  <Project Path="Suruga.Common/Suruga.Common.csproj" />
   <Project Path="Suruga.FFmpeg/Suruga.FFmpeg.csproj" />
   <Project Path="Suruga.PostProcessing/Suruga.PostProcessing.csproj" />
   <Project Path="Suruga/Suruga.csproj" />
