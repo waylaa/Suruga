@@ -37,14 +37,14 @@ public sealed unsafe class ResamplerContext : FFmpegResource<SwrContext>
         NativeMethods.swr_init(ref GetReference()).ThrowIfError();
     }
 
-    public AudioFrameBuffer Resample(Frame source)
+    public AudioFramebuffer Resample(Frame source)
     {
         long delaySamples = NativeMethods.swr_get_delay(ref GetReference(), _inputSampleRate) + source.SamplesPerChannel;
         int maxOutputFrames = (int)NativeMethods.av_rescale_rnd(delaySamples, OutputSampleRate, _inputSampleRate, AVRounding.AV_ROUND_UP);
         
-        AudioFrameBuffer frameBuffer = new(maxOutputFrames, _outputLayout.nb_channels);
+        AudioFramebuffer framebuffer = new(maxOutputFrames, _outputLayout.nb_channels);
         
-        fixed (byte* pChunkBuffer = frameBuffer.Buffer.Span)
+        fixed (byte* pChunkBuffer = framebuffer.Buffer.Span)
         {
             int samplesWritten = NativeMethods.swr_convert
             (
@@ -55,10 +55,10 @@ public sealed unsafe class ResamplerContext : FFmpegResource<SwrContext>
                 source.SamplesPerChannel
             ).ThrowIfError();
 
-            frameBuffer.Resize(samplesWritten);
+            framebuffer.Resize(samplesWritten);
         }
 
-        return frameBuffer;
+        return framebuffer;
     }
 
     public void Reset()
