@@ -1,17 +1,10 @@
-﻿namespace Suruga.Primitives;
+﻿using System.Text.Json.Serialization;
 
-/// <summary>
-/// The source platform for an audio track.
-/// </summary>
-public enum TrackPlatform
+namespace Suruga.Primitives;
+
+[JsonConverter(typeof(JsonStringEnumConverter<TrackPlatform>))]
+internal enum TrackPlatform
 {
-    /// <summary>
-    /// Audio is sourced from a locally stored file.
-    /// </summary>
     Local,
-    
-    /// <summary>
-    /// Audio is sourced from YouTube.
-    /// </summary>
     Youtube
 }

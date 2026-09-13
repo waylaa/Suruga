@@ -3,7 +3,7 @@ using Suruga.Primitives;
 
 namespace Suruga.Persistence;
 
-[JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
+[JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase, WriteIndented = true)]
 [JsonSerializable(typeof(List<Track>))]
 [JsonSerializable(typeof(Track))]
 [JsonSerializable(typeof(TrackPlatform))]

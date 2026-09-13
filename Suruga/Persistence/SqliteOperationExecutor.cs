@@ -1,17 +1,13 @@
 using Microsoft.Data.Sqlite;
+using Suruga.Common;
 
 namespace Suruga.Persistence;
 
-internal sealed class SqliteOperationExecutor
+internal sealed class SqliteOperationExecutor(DatabaseClient client)
 {
-    private readonly DatabaseClient _client;
-    
-    internal SqliteOperationExecutor(DatabaseClient client)
-        => _client = client;
-    
     internal T? Execute<T>(Func<SqliteConnection, T> operation) where T : class?
     {
-        if (!_client.TryGetConnection(out SqliteConnection? connection))
+        if (!client.TryGetConnection(out SqliteConnection? connection))
         {
             return null;
         }
@@ -22,16 +18,17 @@ internal sealed class SqliteOperationExecutor
             {
                 return operation(connection);
             }
-            catch (SqliteException)
+            catch (SqliteException ex)
             {
+                Logger.Error<SqliteOperationExecutor>(ex, "An asynchronous database operation failed.");
                 return null;
             }
         }
     }
 
-    internal async Task ExecuteAsync(Func<SqliteConnection, Task> operation, CancellationToken token)
+    internal async Task ExecuteAsync(Func<SqliteConnection, Task> operation)
     {
-        if (!_client.TryGetConnection(out SqliteConnection? connection))
+        if (!client.TryGetConnection(out SqliteConnection? connection))
         {
             return;
         }
@@ -42,13 +39,13 @@ internal sealed class SqliteOperationExecutor
             {
                 await operation(connection);
             }
-            catch (SqliteException)
+            catch (SqliteException ex)
             {
-                // Ignore.
+                Logger.Error<SqliteOperationExecutor>(ex, "An asynchronous database operation failed.");
             }
             catch (OperationCanceledException)
             {
-                // Ignore.
+                Logger.Error<SqliteOperationExecutor>("An asynchronous database operation was canceled.");
             }
         }
     }
