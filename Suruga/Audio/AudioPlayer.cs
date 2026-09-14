@@ -55,8 +55,7 @@ internal sealed class AudioPlayer
     private CancellationTokenSource? _trackCts;
     private AudioDecoder? _activeDecoder;
     private Task? _playbackLoopTask;
-
-    private bool _isRewindRequested;
+    
     private volatile bool _isDisposed;
 
     internal Task<CommandResult> PlayAsync(TrackSet trackSet)
@@ -96,6 +95,10 @@ internal sealed class AudioPlayer
             }
 
             await StopPlaybackLoopAsync();
+
+            Queue.Reset();
+            await PersistQueueAsync();
+            
             return new CommandResult(CommandStatus.Success);
         });
     }
@@ -154,12 +157,10 @@ internal sealed class AudioPlayer
     {
         return RunCommandAsync(async () =>
         {
-            if (State is AudioPlayerState.Idle || !Queue.HasNextTrack)
+            if (State is AudioPlayerState.Idle || !Queue.TryMoveToNext(out _))
             {
                 return new CommandResult(CommandStatus.NothingToSkip);
             }
-
-            _isRewindRequested = false;
             
             CancelCurrentTrack();
             await PersistQueueAsync();
@@ -172,12 +173,10 @@ internal sealed class AudioPlayer
     {
         return RunCommandAsync(async () =>
         {
-            if (State is AudioPlayerState.Idle || !Queue.HasPreviousTrack)
+            if (State is AudioPlayerState.Idle || !Queue.TryMoveToPrevious(out _))
             {
                 return new CommandResult(CommandStatus.NothingToRewind);
             }
-
-            _isRewindRequested = true;
 
             CancelCurrentTrack();
             await PersistQueueAsync();
@@ -380,19 +379,20 @@ internal sealed class AudioPlayer
     {
         try
         {
-            Track? track = Queue.CurrentTrack;
-            
-            while (!sessionToken.IsCancellationRequested && track is not null)
+            while (!sessionToken.IsCancellationRequested && Queue.CurrentTrack is Track currentTrack)
             {
                 await PersistQueueAsync(sessionToken);
-                await SetStateAsync(AudioPlayerState.Playing, track);
+                await SetStateAsync(AudioPlayerState.Playing, currentTrack);
 
                 using CancellationTokenSource trackCts = CancellationTokenSource.CreateLinkedTokenSource(sessionToken);
                 _trackCts = trackCts;
 
+                bool isPlayedToCompletion = false;
+
                 try
                 {
-                    await PlaySingleTrackAsync(track, trackCts.Token);
+                    await PlaySingleTrackAsync(currentTrack, trackCts.Token);
+                    isPlayedToCompletion = true;
                 }
                 catch (OperationCanceledException) when (sessionToken.IsCancellationRequested)
                 {
@@ -400,25 +400,25 @@ internal sealed class AudioPlayer
                 }
                 catch (OperationCanceledException)
                 {
-                    Logger.Debug<AudioPlayer>($"Track '{track.Title}' skipped/cancelled in guild {guildId}");
+                    Logger.Debug<AudioPlayer>($"Track '{currentTrack.Title}' skipped/cancelled in guild {guildId}");
                 }
                 catch (Exception ex)
                 {
-                    Logger.Error<AudioPlayer>(ex, $"Error playing track '{track.Title}' in guild {guildId}");
-                    await SetStateAsync(AudioPlayerState.Idle, track, ex);
+                    Logger.Error<AudioPlayer>(ex, $"Error playing track '{currentTrack.Title}' in guild {guildId}");
+                    await SetStateAsync(AudioPlayerState.Idle, currentTrack, ex);
                 }
                 finally
                 {
                     _trackCts = null;
                 }
-                
-                bool hasMoved = _isRewindRequested ? Queue.TryMoveToPrevious(out track) : Queue.TryMoveToNext(out track);
-                _isRewindRequested = false;
-                
-                if (!hasMoved)
+
+                if (isPlayedToCompletion)
                 {
-                    Logger.Debug<AudioPlayer>($"No more tracks in queue for guild {guildId}. Ending playback loop.");
-                    break;
+                    if (!Queue.TryAdvanceAfterCompletion(out _))
+                    {
+                        Logger.Debug<AudioPlayer>($"No more tracks in queue for guild {guildId}. Ending playback loop.");
+                        break;
+                    }
                 }
             }
         }

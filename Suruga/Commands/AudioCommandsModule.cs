@@ -325,7 +325,7 @@ internal sealed class AudioCommandsModule(TrackResolverRouter router, AudioSessi
             return;
         }
 
-        IReadOnlyList<Track> queue = session.Player.Queue.Next;
+        IReadOnlyList<Track> queue = session.Player.Queue.QueuedTracks;
         PaginatorSession<Track> paginatorSession = new(new Paginator<Track>(queue, 10));
 
         EmbedProperties embed = EmbedHelper.Queue(session.Player.Queue.CurrentTrack, (GuildUser)Context.User, paginatorSession.Paginator);
@@ -349,7 +349,7 @@ internal sealed class AudioCommandsModule(TrackResolverRouter router, AudioSessi
             return;
         }
 
-        IReadOnlyList<Track> history = session.Player.Queue.Previous;
+        IReadOnlyList<Track> history = session.Player.Queue.History;
         PaginatorSession<Track> paginatorSession = new(new Paginator<Track>(history, 10));
         EmbedProperties embed = EmbedHelper.History((GuildUser)Context.User, paginatorSession.Paginator);
         
