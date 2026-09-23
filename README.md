@@ -16,11 +16,14 @@ Before running Suruga locally, make sure the following services are installed an
 4. Open `.env` and set your configuration. Make sure to provide your `BOT_TOKEN`.
 5. Run the executable.
 
-### Docker Setup
+### Docker/Podman Setup
 
 #### Requirements
 
-* Docker with Docker Compose
+* Docker with Docker Compose or Podman
+
+> [!IMPORTANT]  
+> If using Podman, replace ```docker compose``` with ```podman compose``` in the commands below.
 
 1. Clone the repository:
 
