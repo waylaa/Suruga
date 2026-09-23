@@ -16,6 +16,14 @@ public static partial class Logger
             throw new InvalidOperationException("Global logging has already been initialized.");
         }
     }
+    
+    public static void Release()
+    {
+        ILoggerFactory? factory = Interlocked.Exchange(ref _factory, null);
+        
+        Loggers.Clear();
+        factory?.Dispose();
+    }
 
     public static void Log<T>(LogLevel level, string message, Exception? exception = null)
     {
@@ -53,14 +61,6 @@ public static partial class Logger
     
     public static void Error<T>(Exception exception, string message)
         => LogError(Get<T>(), exception, message);
-
-    public static void Shutdown()
-    {
-        ILoggerFactory? factory = Interlocked.Exchange(ref _factory, null);
-        
-        Loggers.Clear();
-        factory?.Dispose();
-    }
     
     private static ILogger<T> Get<T>()
     {

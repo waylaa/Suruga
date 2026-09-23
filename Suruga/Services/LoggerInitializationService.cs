@@ -14,7 +14,7 @@ internal sealed class LoggerInitializationService(ILoggerFactory loggerFactory) 
 
     public Task StopAsync(CancellationToken cancellationToken)
     {
-        Logger.Shutdown();
+        Logger.Release();
         return Task.CompletedTask;
     }
 }
